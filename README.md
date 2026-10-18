@@ -1,4 +1,4 @@
-# AutoMarker 1.22.2
+# AutoMarker 1.28.0
 AutoMarker for [SuperWoW](https://github.com/balakethelock/SuperWoW/) or [nampower](https://gitea.com/avitasia/nampower) 2.39+ on the 1.12 client.
 
 * Default values are (so far) calibrated for Turtle WoW specifically.
@@ -27,6 +27,44 @@ Many pre-defined groups exists already in the addon but can be customized with t
 - `/am markname <unit name> - Mark all units of a given name.`
 
 - `/am debug - Toggle debug mode.`
+
+### Pack editor
+* `/am ui`, the minimap button or the *Toggle pack editor* key binding opens a window showing the pack of your target.
+  * Click an icon to change a mob's mark (shift-click also applies it in game right away).
+  * Click a name to target the mob if it is loaded. Green = nearby, red = dead, grey = out of range, `!` = mark used twice in the pack.
+  * Arrows: browse the zone's packs in `NPCList.lua` order. *Follow target*: the window follows your target's pack.
+  * Buttons: *Mark*, *Clear*, *+ Target* (moves the target into this pack), *New*, *Sweep* (mouseover capture), *Rename*, *Reset* / *Delete*.
+* Minimap button: left-click opens the editor, right-click enables / disables automatic marking, drag to move it. `/am minimap` shows / hides it.
+* Editing a default pack creates an editable copy of it; *Reset* goes back to the `NPCList.lua` values.
+
+### Auto-adding unknown mobs
+* Inside a raid instance (not in dungeons or the open world), targeting a mob that is in no pack puts it in a new `new_NN` pack with the UNMARKED value,
+  together with the unknown mobs standing within 10 yards (requires UnitXP). These packs can then be edited in the pack editor.
+* The instance type comes from ClassicAPI's `GetInstanceInfo` when you enter it, and is remembered per map id
+  in the configuration file (`mapInfo = { [409] = { name = "Molten Core", type = "raid" }, ... }`).
+* `/am autoadd` toggles it, `/am autoradius <yd>` sets the radius (0 = target only).
+
+### Mob positions
+* Each mob of `NPCList.lua` carries its name and spawn position: `{ mark = SKULL, name = "Venom Stalker", map = 0, x = 0, y = 0 }`
+  (map = `Map.dbc` id, e.g. 533 = Naxxramas, x / y = world coordinates in yards, 0 = unknown), to identify it again later.
+* The first time a mob of a pack is targeted out of combat, its position is recorded in the configuration file.
+  `/am setpos` records the target's position again.
+* The editor shows it in the mob tooltip (with the distance to you); the mob id is green once its position is known.
+* Positions come from `UnitPosition` (ClassicAPI or SuperWoW) and the map id from ClassicAPI's `GetInstanceInfo`.
+
+### Global settings
+* Custom packs are saved to `<WoW folder>\Imports\AutoMarker_Config.txt` (SuperWoW / nampower ExportFile & ImportFile):
+  the same file is used by every account and character, and can be shared with other players.
+* The file uses the same layout as `NPCList.lua`: one `addToCustomNpcsToMark("zone", "pack", { ... })` block per pack, with
+  `["guid"] = { mark = SKULL, name = "...", map = 0, x = 0, y = 0 },` entries. It can be edited by hand (keep one entry per line,
+  then `/am reload`) and its blocks can be copied into `NPCList.lua` (rename the function to `addToDefaultNpcsToMark`).
+* When the file is missing or empty, it is created from every pack of `NPCList.lua`. `/am populate` adds the `NPCList.lua`
+  packs that are missing from an existing file (e.g. after an addon update).
+* A pack that differs from `NPCList.lua` shows as *modified* in the editor; *Reset* restores the `NPCList.lua` version.
+* Files written by older versions are still read and converted right away.
+* The file is written 2 seconds after each change and on logout. `/am save` forces a write, `/am reload` reads the file again.
+* The first time an account logs in, its previous custom packs (SavedVariables) are merged into the file.
+* Avoid editing packs from two game clients at once: the last one to write wins.
 
 ### Automatic Features:  
 * Marks highest health corehound in a fight with a Skull
