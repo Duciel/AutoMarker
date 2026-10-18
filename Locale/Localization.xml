@@ -8,6 +8,7 @@
 	<!-- <Script file="Localization_koKR.lua"/> -->
 	<!-- <Script file="Localization_ruRU.lua"/> -->
 	<Script file="Localization_zhCN.lua"/>
+	<Script file="Localization_fallback.lua"/>
 	<!-- <Script file="Localization_zhTW.lua"/> -->
 
 </Ui>
