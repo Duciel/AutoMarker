@@ -448,7 +448,7 @@ end
 local function CreateGUI()
   local f = CreateFrame("Frame", "AutoMarkerEditor", UIParent)
   f:SetWidth(WIDTH)
-  f:SetHeight(96 + ROWS * ROW_H + 92)
+  f:SetHeight(96 + ROWS * ROW_H + 118)
   f:SetFrameStrata("DIALOG")
   f:SetToplevel(true)
   f:EnableMouse(true)
@@ -599,6 +599,27 @@ local function CreateGUI()
   end, L["Sweep mode: mouse over enemies to add them to this pack."])
   f.sweepBtn:SetPoint("LEFT", newBtn, "RIGHT", 4, 0)
 
+  -- second action row: blacklist
+  local ignoreBtn = Button(f, L["Ignore target"], 100, function()
+    local _, guid = UnitExists("target")
+    local name = guid and UnitName(guid)
+    if not name then API.Print(L["Target a mob or give a name: /am ignore <name>"]) return end
+    if API.Ignore(name) then
+      API.Print(L["Ignored from now on: "] .. name)
+      local pn = API.GetPackOf(guid, state.zone)
+      local pack = pn and API.GetPack(state.zone, pn)
+      if pack and pack[guid] == 0 then API.RemoveMob(state.zone, pn, guid) end
+    else
+      API.Print(name .. L[" is already ignored."])
+    end
+    Refresh()
+  end, L["Never auto-add mobs with the target's name (summons, adds...).\nList: /am ignorelist - undo: /am unignore <name>"])
+  ignoreBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 16, y - 26)
+
+  local ignoreListBtn = Button(f, L["Ignore list"], 90, function() AutoMarker_ToggleIgnoreGUI() end,
+    L["Show the list of ignored mob names (add / remove)."])
+  ignoreListBtn:SetPoint("LEFT", ignoreBtn, "RIGHT", 4, 0)
+
   local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   hint:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 14)
   hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -18, 14)
@@ -624,6 +645,202 @@ local function CreateGUI()
   return f
 end
 
+-- Ignore list window -----------------------------------------------------------
+-- Names never added automatically (summons, adds...): list, add by typing / from the target, remove.
+
+local IG_ROWS = 10
+local IG_ROW_H = 20
+local IG_WIDTH = 300
+local ignoreGui
+local ignoreNames = {}
+
+local function RefreshIgnore()
+  if not ignoreGui or not ignoreGui:IsShown() then return end
+  ignoreNames = API.GetIgnoredList()
+  local total = getn(ignoreNames)
+  ignoreGui.countText:SetText(format(L["%d ignored names"], total))
+  FauxScrollFrame_Update(ignoreGui.scroll, total, IG_ROWS, IG_ROW_H)
+  local offset = tonumber(FauxScrollFrame_GetOffset(ignoreGui.scroll)) or 0
+  for i = 1, IG_ROWS do
+    local row = ignoreGui.rows[i]
+    local name = ignoreNames[offset + i]
+    if name then
+      row.name = name
+      row.text:SetText(name)
+      row:Show()
+    else
+      row.name = nil
+      row:Hide()
+    end
+  end
+end
+
+StaticPopupDialogs["AUTOMARKER_PURGE_IGNORED"] = {
+  text = "%s",
+  button1 = YES,
+  button2 = NO,
+  OnAccept = function()
+    local n, p = API.PurgeIgnored(false)
+    API.Print(format(L["%d unmarked mobs and %d empty packs removed from the configuration."], n, p))
+    RefreshIgnore()
+  end,
+  timeout = 0,
+  whileDead = 1,
+  hideOnEscape = 1,
+}
+
+local function IgnoreFromBox()
+  local box = ignoreGui.box
+  local name = string.gsub(box:GetText() or "", "^%s*(.-)%s*$", "%1")
+  box:SetText("")
+  box:ClearFocus()
+  if name == "" then return end
+  if API.Ignore(name) then
+    API.Print(L["Ignored from now on: "] .. name)
+  else
+    API.Print(name .. L[" is already ignored."])
+  end
+  RefreshIgnore()
+end
+
+local function CreateIgnoreGUI()
+  local f = CreateFrame("Frame", "AutoMarkerIgnore", UIParent)
+  f:SetWidth(IG_WIDTH)
+  f:SetHeight(100 + IG_ROWS * IG_ROW_H + 60)
+  f:SetFrameStrata("DIALOG")
+  f:SetToplevel(true)
+  f:EnableMouse(true)
+  f:SetMovable(true)
+  f:SetClampedToScreen(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function() this:StartMoving() end)
+  f:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
+  f:SetPoint("CENTER", UIParent, "CENTER", 40, 0)
+  Skin(f, "frame")
+  tinsert(UISpecialFrames, "AutoMarkerIgnore")
+
+  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  title:SetPoint("TOP", f, "TOP", 0, -16)
+  title:SetText("AutoMarker - " .. L["Ignored mobs"])
+
+  local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+  close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+  Skin(close, "close")
+
+  local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  hint:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -38)
+  hint:SetText(L["Never added automatically (summons, adds...)"])
+
+  f.countText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  f.countText:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -54)
+
+  -- add: typed name or target
+  local box = CreateFrame("EditBox", "AutoMarkerIgnoreBox", f, "InputBoxTemplate")
+  box:SetWidth(130)
+  box:SetHeight(20)
+  box:SetPoint("TOPLEFT", f, "TOPLEFT", 22, -72)
+  box:SetAutoFocus(false)
+  box:SetMaxLetters(48)
+  box:SetScript("OnEnterPressed", function() IgnoreFromBox() end)
+  box:SetScript("OnEscapePressed", function() this:ClearFocus() end)
+  f.box = box
+
+  local addBtn = Button(f, L["Add"], 46, function() IgnoreFromBox() end,
+    L["Add the typed name to the list (Enter works too)."])
+  addBtn:SetPoint("LEFT", box, "RIGHT", 6, 0)
+
+  local tgtBtn = Button(f, L["+ Target"], 64, function()
+    local _, guid = UnitExists("target")
+    local name = guid and UnitName(guid)
+    if name and API.Ignore(name) then
+      API.Print(L["Ignored from now on: "] .. name)
+    elseif name then
+      API.Print(name .. L[" is already ignored."])
+    else
+      API.Print(L["Target a mob or give a name: /am ignore <name>"])
+    end
+    RefreshIgnore()
+  end, L["Add the name of the target to the list."])
+  tgtBtn:SetPoint("LEFT", addBtn, "RIGHT", 4, 0)
+
+  local purgeBtn = Button(f, L["Clean config"], 100, function()
+    local n, p, kept = API.PurgeIgnored(true)
+    if n == 0 then
+      API.Print(L["Nothing to clean: no unmarked mob has an ignored name."])
+      return
+    end
+    StaticPopup_Show("AUTOMARKER_PURGE_IGNORED", format(
+      L["Remove %d unmarked mobs (and %d empty packs) with an ignored name from the configuration? Marked mobs are kept (%d)."], n, p, kept))
+  end, L["Removes from the configuration every UNMARKED mob whose name is in this list,\nand the auto-created packs left empty. Marked mobs are kept."])
+  purgeBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 16)
+
+  -- rows
+  local scroll = CreateFrame("ScrollFrame", "AutoMarkerIgnoreScroll", f, "FauxScrollFrameTemplate")
+  scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -100)
+  scroll:SetWidth(IG_WIDTH - 50)
+  scroll:SetHeight(IG_ROWS * IG_ROW_H)
+  scroll:SetScript("OnVerticalScroll", function()
+    FauxScrollFrame_OnVerticalScroll(IG_ROW_H, RefreshIgnore)
+  end)
+  f.scroll = scroll
+  scroll.offset = 0
+  if pfUI and pfUI.api and pfUI.api.SkinScrollbar then
+    pcall(pfUI.api.SkinScrollbar, getglobal("AutoMarkerIgnoreScrollScrollBar"))
+  end
+
+  f.rows = {}
+  for i = 1, IG_ROWS do
+    local row = CreateFrame("Frame", nil, f)
+    row:SetWidth(IG_WIDTH - 50)
+    row:SetHeight(IG_ROW_H)
+    row:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -100 - (i - 1) * IG_ROW_H)
+
+    local text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    text:SetPoint("LEFT", row, "LEFT", 6, 0)
+    text:SetPoint("RIGHT", row, "RIGHT", -24, 0)
+    text:SetJustifyH("LEFT")
+    row.text = text
+
+    local del = CreateFrame("Button", nil, row)
+    del:SetWidth(16)
+    del:SetHeight(16)
+    del:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+    del:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+    del:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+    del:SetScript("OnClick", function()
+      local name = this:GetParent().name
+      if name and API.Unignore(name) then
+        API.Print(L["No longer ignored: "] .. name)
+      end
+      RefreshIgnore()
+    end)
+    del:SetScript("OnEnter", function()
+      GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+      GameTooltip:SetText(L["Remove from the list"], 1, 1, 1)
+      GameTooltip:Show()
+    end)
+    del:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    row:Hide()
+    f.rows[i] = row
+  end
+
+  f:EnableMouseWheel(true)
+  f:SetScript("OnMouseWheel", function()
+    local bar = getglobal("AutoMarkerIgnoreScrollScrollBar")
+    if bar and scroll:IsShown() then bar:SetValue(bar:GetValue() - arg1 * IG_ROW_H * 3) end
+  end)
+  f:SetScript("OnShow", function() RefreshIgnore() end)
+
+  f:Hide()
+  return f
+end
+
+function AutoMarker_ToggleIgnoreGUI()
+  if not AutoMarkerDB then return end
+  if not ignoreGui then ignoreGui = CreateIgnoreGUI() end
+  if ignoreGui:IsShown() then ignoreGui:Hide() else ignoreGui:Show() end
+end
+
 -- Public ----------------------------------------------------------------------
 
 function AutoMarker_ToggleGUI()
@@ -632,7 +849,7 @@ function AutoMarker_ToggleGUI()
   if gui:IsShown() then gui:Hide() else gui:Show() end
 end
 
-API.OnDataChanged = function() Refresh() end
+API.OnDataChanged = function() Refresh() RefreshIgnore() end
 API.OnTargetChanged = function() FollowTarget(false) end
 
 -- Minimap button ----------------------------------------------------------------

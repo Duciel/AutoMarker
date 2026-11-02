@@ -1,4 +1,4 @@
-# AutoMarker 1.28.0
+# AutoMarker 1.29.0
 AutoMarker for [SuperWoW](https://github.com/balakethelock/SuperWoW/) or [nampower](https://gitea.com/avitasia/nampower) 2.39+ on the 1.12 client.
 
 * Default values are (so far) calibrated for Turtle WoW specifically.
@@ -43,6 +43,12 @@ Many pre-defined groups exists already in the addon but can be customized with t
 * The instance type comes from ClassicAPI's `GetInstanceInfo` when you enter it, and is remembered per map id
   in the configuration file (`mapInfo = { [409] = { name = "Molten Core", type = "raid" }, ... }`).
 * `/am autoadd` toggles it, `/am autoradius <yd>` sets the radius (0 = target only).
+
+
+### Ignored mobs (blacklist)
+
+Summons and script adds (e.g. Lava Spawn) get a new GUID every time, so they are useless in a pack. Names listed in the `ignoredNames = { ... }` block of `AutoMarker_Config.txt` are never auto-added (case insensitive, `Lava Spawn` is there by default).
+`/am ignore [name]` (target if no name), `/am unignore [name]`, `/am ignorelist` (opens the list window: add a typed name or the target, remove with the x), or the **Ignore target** / **Ignore list** buttons of the editor. The **Clean config** button of the list window removes from the configuration every UNMARKED mob whose name is ignored (marked mobs are kept) and the auto-created packs left empty.
 
 ### Mob positions
 * Each mob of `NPCList.lua` carries its name and spawn position: `{ mark = SKULL, name = "Venom Stalker", map = 0, x = 0, y = 0 }`

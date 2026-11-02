@@ -383,8 +383,8 @@ local function guidToPack(id, zone)
   end
   -- scan for the id, but, we also want to prioritise custom markings
   local rPackName,rPack
-  -- PERF (modif. locale) : acces direct packInfo[id] au lieu de parcourir chaque pack
-  for packName, packInfo in pairs(currentNpcsToMark[zone]) do
+  -- PERF (local change): direct packInfo[id] lookup instead of walking every pack
+  for packName, packInfo in pairs(currentNpcsToMark[zone] or {}) do
     if packInfo[id] ~= nil then
       rPackName = packName
       rPack = packInfo
@@ -418,6 +418,7 @@ end
   * map / x / y: spawn position recorded the first time the mob is targeted
     (map = Map.dbc id, x / y = world coordinates in yards, 0 = unknown)
   * mapInfo: name and type ("raid", "party" = dungeon, "pvp") of every instance map entered
+  * ignoredNames: mob names never added automatically (summons, adds...), one quoted name per line
   * when the file is missing or empty it is created from every pack of NPCList.lua
   The file is never executed: it is parsed line by line, so keep one entry per line.
 --]]
@@ -427,13 +428,15 @@ local has_file_io = type(ExportFile) == "function" and type(ImportFile) == "func
 local npcNames = {}          -- guid -> name, learned in game (global file)
 local npcPos = {}            -- guid -> { map =, x =, y = }, learned in game (global file)
 local mapInfo = {}           -- map id -> { name =, type = "raid" | "party" | "pvp" }, learned in game (global file)
+local ignored = {}           -- lower case mob name -> mob name never auto-added (global file)
+local DEFAULT_IGNORED = { "Lava Spawn" }
 local save_dirty = false
 local save_timer = 0
 local SAVE_DELAY = 2         -- seconds of quiet before writing the file
--- PERF (modif. locale) : les changements automatiques (positions des mobs cibles,
--- type d'instance, packs decouverts) ne declenchent plus une reecriture complete
--- du fichier 2 s apres chaque cible ; ils sont ecrits au prochain ecran de
--- chargement, a la deconnexion, ou avec la prochaine sauvegarde normale.
+-- PERF (local change): automatic changes (positions of targeted mobs, instance
+-- type, discovered packs) no longer rewrite the whole file 2 s after each
+-- target; they are written at the next loading screen, at logout, or with the
+-- next normal save. No save at all while in combat.
 local save_deferred = false
 local warned_io = false
 
@@ -601,6 +604,17 @@ local function SerializeConfig()
     tinsert(out, "}")
   end
 
+  tinsert(out, "")
+  tinsert(out, "--/////////////// Ignored mobs ///////////////")
+  tinsert(out, "-- names never added automatically (summons, adds...), one quoted name per line, case insensitive")
+  tinsert(out, "")
+  tinsert(out, "ignoredNames = {")
+  local inames = {}
+  for _, n in pairs(ignored) do tinsert(inames, n) end
+  tsort(inames)
+  for _, n in ipairs(inames) do tinsert(out, "  " .. LuaQuote(n) .. ",") end
+  tinsert(out, "}")
+
   local customs = AutoMarkerDB.customNpcsToMark
   local written = {}
   for _, zone in ipairs(SortedKeys(customs)) do
@@ -671,10 +685,11 @@ end
 local function ParseConfig(text)
   if not text or text == "" then return nil end
   local packs, names, positions, maps = {}, {}, {}, {}
+  local ignoredList -- nil when the file has no ignoredNames block
 
   if not sfind(text, "NpcsToMark", 1, true) and not sfind(text, "npcPositions", 1, true) then
     ParseLegacyConfig(text, packs, names, positions)
-    return packs, names, positions, true, maps -- legacy: rewrite it in the new layout
+    return packs, names, positions, true, maps, nil -- legacy: rewrite it in the new layout
   end
 
   local zone, packName, block -- block: "pack" or "positions"
@@ -700,6 +715,13 @@ local function ParseConfig(text)
       block = "positions"
     elseif sfind(line, "^mapInfo%s*=%s*{") then
       block = "maps"
+    elseif sfind(line, "^ignoredNames%s*=%s*{") then
+      block = "ignored"
+      ignoredList = ignoredList or {}
+      if sfind(line, "}%s*;?%s*$") then block = nil end -- empty block on one line
+    elseif block == "ignored" and sfind(line, "^[\"']") then
+      local n = ReadQuoted(line, 1)
+      if n and n ~= "" then tinsert(ignoredList, n) end
     elseif block == "maps" and sfind(line, "^%[%s*%d+%s*%]") then
       local _, _, id = sfind(line, "^%[%s*(%d+)%s*%]")
       local _, ne = sfind(line, "[%s{,]name%s*=%s*")
@@ -750,7 +772,7 @@ local function ParseConfig(text)
       end
     end
   end
-  return packs, names, positions, false, maps
+  return packs, names, positions, false, maps, ignoredList
 end
 
 -- copies every default pack (NPCList.lua) that the configuration doesn't have yet
@@ -799,6 +821,15 @@ local function MarkConfigDirty(background)
   if AutoMarkerAPI and AutoMarkerAPI.OnDataChanged then
     AutoMarkerAPI.OnDataChanged()
   end
+end
+
+local function IsIgnoredName(name)
+  return name and ignored[string.lower(name)] and true or false
+end
+
+local function SetIgnoredList(list)
+  ignored = {}
+  for _, n in ipairs(list) do ignored[string.lower(n)] = n end
 end
 
 -- Records the position of a mob the first time it is seen (force = overwrite).
@@ -1098,6 +1129,7 @@ local function IsDiscoverable(guid)
   if ctype == "Critter" or ctype == "Non-combat Pet" then return false end
   local name = UnitName(guid)
   if not name or temporary_mobs[name] then return false end -- script spawned adds are handled elsewhere
+  if IsIgnoredName(name) then return false end -- blacklisted name (summons...)
   return true
 end
 
@@ -1384,7 +1416,7 @@ function autoMarker:Initialize()
   end
 
   -- global configuration file, shared by every account and character
-  local filePacks, fileNames, filePos, fileLegacy, fileMaps = LoadGlobalConfig()
+  local filePacks, fileNames, filePos, fileLegacy, fileMaps, fileIgnored = LoadGlobalConfig()
   if filePacks then
     -- first run of this account with the global file: keep its own customs that the file doesn't know
     if not AutoMarkerDB.migratedToGlobal then
@@ -1404,10 +1436,17 @@ function autoMarker:Initialize()
     for g, n in pairs(fileNames) do npcNames[g] = n end
     for g, p in pairs(filePos) do npcPos[g] = p end
     for id, m in pairs(fileMaps or {}) do mapInfo[id] = m end
+    if fileIgnored then
+      SetIgnoredList(fileIgnored)
+    else
+      SetIgnoredList(DEFAULT_IGNORED) -- file without an ignoredNames block: start from the defaults
+      save_dirty = true
+    end
     if fileLegacy then save_dirty = true end -- convert an older file to the current layout right away
   elseif has_file_io then
     -- no file yet: create it from NPCList.lua plus this account's own custom packs
     PopulateFromDefaults(AutoMarkerDB.customNpcsToMark)
+    SetIgnoredList(DEFAULT_IGNORED)
     save_dirty = true
   end
   if has_file_io then AutoMarkerDB.migratedToGlobal = true end
@@ -1835,6 +1874,63 @@ function API.GetMapInfo(id)
   local m = id and mapInfo[id]
   if m then return m.name, m.type end
 end
+function API.IsIgnored(name) return IsIgnoredName(name) end
+function API.GetIgnoredList()
+  local l = {}
+  for _, n in pairs(ignored) do tinsert(l, n) end
+  tsort(l)
+  return l
+end
+function API.Ignore(name)
+  if not name or name == "" or IsIgnoredName(name) then return false end
+  ignored[string.lower(name)] = name
+  MarkConfigDirty()
+  return true
+end
+function API.Unignore(name)
+  if not IsIgnoredName(name) then return false end
+  ignored[string.lower(name)] = nil
+  MarkConfigDirty()
+  return true
+end
+-- Removes from the configuration every UNMARKED mob whose name is on the ignore list
+-- (marked mobs are kept), then the packs left empty that have no NPCList.lua version.
+-- dry = true only counts. Returns removed mobs, removed packs, ignored-name mobs kept because marked.
+function API.PurgeIgnored(dry)
+  local removed, packsGone, kept = 0, 0, 0
+  for zone, packs in pairs(AutoMarkerDB.customNpcsToMark) do
+    local empty = {}
+    for packName, pack in pairs(packs) do
+      local drop, total = {}, 0
+      for guid, mark in pairs(pack) do
+        total = total + 1
+        if IsIgnoredName(GetMobName(guid)) then
+          if (tonumber(mark) or 0) == 0 then tinsert(drop, guid) else kept = kept + 1 end
+        end
+      end
+      removed = removed + getn(drop)
+      if not dry then
+        for _, guid in ipairs(drop) do
+          pack[guid] = nil
+          npcPos[guid] = nil
+          npcNames[guid] = nil
+        end
+      end
+      if getn(drop) > 0 and not (defaultNpcsToMark[zone] and defaultNpcsToMark[zone][packName]) then
+        if total == getn(drop) then tinsert(empty, packName) end
+      end
+    end
+    packsGone = packsGone + getn(empty)
+    if not dry then
+      for _, packName in ipairs(empty) do
+        packs[packName] = nil
+        if currentNpcsToMark[zone] then currentNpcsToMark[zone][packName] = nil end
+      end
+    end
+  end
+  if not dry and removed > 0 then MarkConfigDirty() end
+  return removed, packsGone, kept
+end
 function API.RecordPos(guid, unit, force) return RecordMobPos(guid, unit, force) end
 function API.GetPackOf(guid, zone) return guidToPack(guid, zone or GetRealZoneText()) end
 function API.GetPack(zone, pack) return currentNpcsToMark[zone] and currentNpcsToMark[zone][pack] end
@@ -1965,7 +2061,7 @@ function API.PopulateFromDefaults()
 end
 
 function API.ReloadGlobal()
-  local packs, names, positions, legacy, maps = LoadGlobalConfig()
+  local packs, names, positions, legacy, maps, ignoredFromFile = LoadGlobalConfig()
   if not packs then return false end
   -- back to defaults, then apply the file
   for zone, ps in pairs(AutoMarkerDB.customNpcsToMark) do
@@ -1984,6 +2080,12 @@ function API.ReloadGlobal()
   for g, n in pairs(names) do npcNames[g] = n end
   for g, p in pairs(positions) do npcPos[g] = p end
   for id, m in pairs(maps or {}) do mapInfo[id] = m end
+  if ignoredFromFile then
+    SetIgnoredList(ignoredFromFile)
+  else
+    SetIgnoredList(DEFAULT_IGNORED)
+    legacy = true
+  end
   save_dirty = legacy and true or false
   if API.OnDataChanged then API.OnDataChanged() end
   return true
@@ -2117,6 +2219,42 @@ local function handleCommands(msg, editbox)
     auto_print(format(L["%d default packs added to the configuration."], API.PopulateFromDefaults()))
   elseif command == "minimap" then
     AutoMarker_ToggleMinimapButton()
+  elseif command == "ignore" or command == "unignore" then
+    tremove(args, 1)
+    local name = table.concat(args, " ")
+    local guid
+    if name == "" then
+      guid = getGuid()
+      name = guid and UnitName(guid)
+    end
+    if not name or name == "" then
+      auto_print(L["Target a mob or give a name: /am ignore <name>"])
+    elseif command == "ignore" then
+      if API.Ignore(name) then
+        auto_print(L["Ignored from now on: "] .. c(name, color.orange))
+        -- drop the targeted mob if auto-add had just put it in a pack, unmarked
+        local pn = guid and guidToPack(guid, zoneName)
+        if pn and (tonumber(AutoMarkerDB.customNpcsToMark[zoneName] and AutoMarkerDB.customNpcsToMark[zoneName][pn]
+            and AutoMarkerDB.customNpcsToMark[zoneName][pn][guid]) or 1) == 0 then
+          API.RemoveMob(zoneName, pn, guid)
+        end
+      else
+        auto_print(c(name, color.orange) .. L[" is already ignored."])
+      end
+    else
+      if API.Unignore(name) then
+        auto_print(L["No longer ignored: "] .. c(name, color.orange))
+      else
+        auto_print(c(name, color.orange) .. L[" is not in the ignore list."])
+      end
+    end
+  elseif command == "ignorelist" then
+    if AutoMarker_ToggleIgnoreGUI then
+      AutoMarker_ToggleIgnoreGUI()
+    else
+      local l = API.GetIgnoredList()
+      auto_print(L["Ignored mobs: "] .. (l[1] and table.concat(l, ", ") or L["none"]))
+    end
   elseif command == "autoadd" then
     AutoMarkerDB.settings.autoAdd = not AutoMarkerDB.settings.autoAdd
     auto_print(L["Auto-add unknown raid mobs: "] .. (AutoMarkerDB.settings.autoAdd and c(L["on"], color.green) or c(L["off"], color.red)))
@@ -2152,6 +2290,7 @@ local function handleCommands(msg, editbox)
       auto_print("/am " .. c("setpos", color.green) .. L[" - Record (again) the position of the target."])
       auto_print("/am " .. c("populate", color.green) .. L[" - Add the NPCList.lua packs missing from the configuration file."])
       auto_print("/am " .. c("minimap", color.green) .. L[" - Show / hide the minimap button."])
+      auto_print("/am " .. c("ignore", color.green) .. L[" [name] - Never auto-add this mob name (default: the target). Also: unignore, ignorelist (window)."])
       auto_print("/am " .. c("autoadd", color.green) .. L[" - Toggle auto-adding (UNMARKED) of unknown mobs targeted in a raid."])
       auto_print("/am " .. c("autoradius", color.green) .. L[" <yd> - Radius to group unknown mobs around the target (0 = target only)."])
       auto_print("/am " .. c("save", color.green) .. " / " .. c("reload", color.green) .. L[" - Write / read back "] .. "Imports\\" .. GLOBAL_FILE .. ".txt" .. L[" (global settings)."])
