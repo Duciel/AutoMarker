@@ -249,7 +249,7 @@ function parseConfig(text) {
         let zone = zoneByName[z];
         if (!zone) { zone = { name: z, packs: [] }; zoneByName[z] = zone; out.zones.push(zone); }
         pack = zone.packs.find(x => x.name === p);
-        if (!pack) { pack = { name: p, zone: z, mobs: [] }; zone.packs.push(pack); }
+        if (!pack) { pack = { name: p, zone: z, mobs: [], wm: [] }; zone.packs.push(pack); }
         block = 'pack';
       } else { block = null; pack = null; }
       if (/\}\s*\)\s*;?\s*$/.test(line)) block = null;
@@ -275,6 +275,18 @@ function parseConfig(text) {
       if (!g || !g[0]) continue;
       const guid = g[0];
       let body = ' ' + line.slice(g[1]);
+      const wk = guid.match(/^worldmarker:(\d)$/);
+      if (wk || guid.startsWith('location:')) {      // named position of the pack (no mob), optionally a WeirdUtils world marker
+        if (block === 'pack' && pack) {
+          let lname = '';
+          const lne = body.match(/[\s{,]name\s*=\s*/);
+          if (lne) { const r = readQuoted(body, lne.index + lne[0].length); if (r) { lname = r[0]; body = body.slice(0, lne.index + 1) + body.slice(r[1]); } }
+          const n = k => { const r = body.match(new RegExp('[\\s{,]' + k + '\\s*=\\s*(-?[\\d.]+)')); return r ? parseFloat(r[1]) : 0; };
+          let slot = wk ? +wk[1] : n('worldmark'); if (!(slot >= 0 && slot <= 5)) slot = 0;
+          pack.wm.push({ name: lname, slot, map: n('map'), x: n('x'), y: n('y'), z: n('z') });
+        }
+        continue;
+      }
       let name = '';
       const ne = body.match(/[\s{,]name\s*=\s*/);
       if (ne) {
@@ -321,6 +333,7 @@ function serialize(d) {
     '-- mark: SKULL, CROSS, SQUARE, MOON, TRIANGLE, DIAMOND, CIRCLE, STAR, UNMARKED',
     '-- map / x / y: spawn position (Map.dbc id, world coordinates in yards), 0 = not recorded yet:',
     '-- it is filled the first time the mob is targeted out of combat (alive); path = "x,y;x,y" lists patrol waypoints.',
+    '-- ["location:N"] = { name, worldmark = 0-5, map, x, y, z }: a named position of the pack (no mob); worldmark 1-5 = WeirdUtils world marker placed there.',
     '-- Written by the addon (/am save) and read back on login (/am reload): hand edits are fine, keep one entry per line.',
   ];
   const ids = Object.keys(d.maps).map(Number).sort((a, b) => a - b);
@@ -341,6 +354,7 @@ function serialize(d) {
       out.push('', 'addToCustomNpcsToMark(' + luaQuote(z.name) + ', ' + luaQuote(p.name) + ', {');
       const mobs = [...p.mobs].sort((a, b) => (a.mark !== b.mark ? b.mark - a.mark : cmp(a.guid, b.guid)));
       for (const m of mobs) out.push(entryLine(m));
+      (p.wm || []).forEach((w, i) => out.push('  ["location:' + (i + 1) + '"] = { name = ' + luaQuote(w.name) + ', worldmark = ' + (w.slot || 0) + ', map = ' + Math.round(w.map) + ', x = ' + w.x.toFixed(1) + ', y = ' + w.y.toFixed(1) + ', z = ' + (w.z || 0).toFixed(1) + ' },'));
       out.push('})');
     }
   }
@@ -471,6 +485,7 @@ $('btnTheme').onclick = () => {
 function mapIds() {
   const c = {};
   for (const p of allPacks()) for (const m of p.mobs) if (hasPos(m)) c[m.map] = (c[m.map] || 0) + 1;
+  for (const p of allPacks()) for (const w of (p.wm || [])) c[w.map] = (c[w.map] || 0) + 1;
   for (const id of Object.keys(db.maps)) if (!(id in c)) c[id] = 0;
   for (const o of db.orphans) if (hasPos(o) && !(o.map in c)) c[o.map] = 0;
   return Object.keys(c).map(Number).sort((a, b) => c[b] - c[a] || a - b);
@@ -565,6 +580,11 @@ function renderInspector() {
     '<div class="row"><input type="text" id="renameBox" class="grow" value="' + esc(p.name) + '"><button id="btnRename">Rename</button><button id="btnDelPack" class="danger">Delete</button></div>' +
     '<div class="row"><span class="muted small">All mobs:</span><span class="marks" id="bulkMarks" style="display:flex;gap:2px;flex-wrap:wrap">' + markButtons(-1) + '</span></div>' +
     '<div class="row"><input type="text" id="newPackBox" class="grow" placeholder="New pack in this zone"><button id="btnNewPack">Create</button></div>' +
+    '<h2 style="margin-top:12px">Locations (' + (p.wm || []).length + ')</h2>' +
+    '<div class="small muted">Named positions of the pack, no mob. An icon 1-5 makes WeirdUtils (worldmarkers.dll) place a world marker there with the pack; independent of the raid marks on mobs.</div>' +
+    (p.wm || []).map((w, i) => '<div class="row wmrow" data-i="' + i + '"><select data-wact="slot" title="World marker">' + [0, 1, 2, 3, 4, 5].map(n => '<option value="' + n + '"' + (n === w.slot ? ' selected' : '') + '>' + (n ? '#' + n : 'none') + '</option>').join('') +
+      '</select><input type="text" class="grow" data-wact="name" value="' + esc(w.name) + '" title="Map ' + w.map + '  x ' + w.x.toFixed(1) + '  y ' + w.y.toFixed(1) + '"><button data-wact="move" title="Click on the map to move it">Move…</button><button data-wact="del" class="danger">×</button></div>').join('') +
+    '<div class="row"><button id="btnWmAdd">Add location on map…</button></div>' +
     '<h2 style="margin-top:12px">Mobs (' + p.mobs.length + ')</h2>';
   for (const m of mobs) {
     const placed = hasPos(m);
@@ -582,6 +602,17 @@ function renderInspector() {
   box.innerHTML = h;
   const sel = box.querySelector('.mobrow.sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
 }
+$('inspector').addEventListener('change', e => {
+  const t = e.target, p = selPack(); if (!p || !t.dataset.wact) return;
+  const w = p.wm[+t.closest('.wmrow').dataset.i]; if (!w) return;
+  pushUndo();
+  if (t.dataset.wact === 'slot') {
+    const n = +t.value;
+    if (n) for (const o of p.wm) if (o !== w && o.slot === n) o.slot = 0;     // one location per world marker
+    w.slot = n;
+  } else if (t.dataset.wact === 'name') w.name = t.value.replace(/[\r\n\t]/g, ' ').trim() || w.name;
+  renderAll();
+});
 $('inspector').addEventListener('click', e => {
   const p = selPack(); if (!p) return;
   const t = e.target;
@@ -597,10 +628,19 @@ $('inspector').addEventListener('click', e => {
     const z = db.zones.find(x => x.name === p.zone); z.packs = z.packs.filter(x => x !== p);
     ui.selPack = null; setSel(null); renderAll(); return;
   }
+  if (t.id === 'btnWmAdd' || t.dataset.wact === 'move') {
+    if (ui.curMap === null) return;
+    const which = t.id === 'btnWmAdd' ? 'new' : t.closest('.wmrow').dataset.i;
+    ui.placing = 'wm:' + which; showHint('Click on the map to place the location of ' + p.name + ' (middle or right button: pan, Esc: cancel)'); renderMap(); return;
+  }
+  if (t.dataset.wact === 'del') {
+    const i = +t.closest('.wmrow').dataset.i;
+    pushUndo(); p.wm.splice(i, 1); renderAll(); return;
+  }
   if (t.id === 'btnNewPack') {
     const n = $('newPackBox').value.trim(); if (!n) return;
     if (findPack(p.zone, n)) { alert('A pack with this name already exists in this zone.'); return; }
-    pushUndo(); db.zones.find(x => x.name === p.zone).packs.push({ name: n, zone: p.zone, mobs: [] });
+    pushUndo(); db.zones.find(x => x.name === p.zone).packs.push({ name: n, zone: p.zone, mobs: [], wm: [] });
     ui.selPack = n; renderAll(); return;
   }
   const mk = t.closest('.mk');
@@ -681,7 +721,7 @@ $('multiBox').addEventListener('click', e => {
     pushUndo();
     const z = db.zones.find(x => x.name === zone);
     let dest = z.packs.find(x => x.name === name);
-    if (!dest) { dest = { name, zone, mobs: [] }; z.packs.push(dest); }
+    if (!dest) { dest = { name, zone, mobs: [], wm: [] }; z.packs.push(dest); }
     const touched = new Set();
     for (const g of [...ui.multi]) {                    // one entry per mob: drop it from every pack of the zone, then add it to the target
       let proto = null;
@@ -694,7 +734,7 @@ $('multiBox').addEventListener('click', e => {
       }
       if (proto) dest.mobs.push(proto);
     }
-    z.packs = z.packs.filter(p => p === dest || !(touched.has(p) && p.mobs.length === 0 && /^new_\d+$/.test(p.name)));
+    z.packs = z.packs.filter(p => p === dest || !(touched.has(p) && p.mobs.length === 0 && !(p.wm && p.wm.length) && /^new_\d+$/.test(p.name)));
     ui.selZone = zone; ui.selPack = name;
     renderAll();
   }
@@ -834,6 +874,17 @@ function drawMap() {
     });
   }
   s += hulls + mobsSvg + texts;
+  // WeirdUtils world markers of the packs (positions without a mob)
+  for (const p of allPacks()) (p.wm || []).forEach((k, ki) => {
+    if (k.map !== ui.curMap) return;
+    const [px, py] = dispToScreen(...worldToDisp(k.x, k.y));
+    if (px < -30 || py < -30 || px > w + 30 || py > h + 30) return;
+    const isSel = p === selP, op = dim && !isSel ? 0.35 : 1;
+    s += '<g class="wmk" data-wz="' + esc(p.zone) + '" data-wp="' + esc(p.name) + '" data-wi="' + ki + '" transform="translate(' + px.toFixed(1) + ',' + py.toFixed(1) + ')" opacity="' + op + '" style="cursor:pointer">' +
+      '<path d="M0,-15 L11,0 L0,15 L-11,0 Z" fill="#14171c" stroke="' + packColor(p) + '" stroke-width="' + (isSel ? 3 : 2) + '"/>' +
+      '<text y="4" text-anchor="middle" font-size="11" font-weight="700" fill="' + packColor(p) + '" pointer-events="none">' + (k.slot || '·') + '</text>' +
+      '<text x="14" y="-9" font-size="10" fill="#e8e6e1" stroke="rgba(0,0,0,.7)" stroke-width="3" paint-order="stroke" pointer-events="none">' + esc(k.name || 'location') + (k.slot ? '' : ' (no marker)') + '</text></g>';
+  });
   // calibration markers
   if (ui.calib && ui.bg) {
     const T = ui.bg.T;
@@ -877,6 +928,16 @@ svg.addEventListener('pointerdown', e => {
   if (ui.calib) { calibClick(px, py, g ? g.dataset.g : null); return; }
   if (ui.placing) { placeAt(px, py); return; }
   svg.setPointerCapture(e.pointerId);
+  const wk = e.target.closest('.wmk');
+  if (wk) {
+    const pk = findPack(wk.dataset.wz, wk.dataset.wp), w = pk && pk.wm[+wk.dataset.wi];
+    if (!w) return;
+    ui.selZone = pk.zone; ui.selPack = pk.name; ui.selGuid = null; ui.multi = new Set();
+    const [d0x, d0y] = screenToDisp(px, py);
+    ui.wmDrag = { w, sx: px, sy: py, d0x, d0y, ox: w.x, oy: w.y, moved: false, undone: false };
+    renderMulti(); renderPackList(); renderInspector(); renderMap();
+    return;
+  }
   if (g) {
     const guid = g.dataset.g, found = findMob(guid);
     if (!found) return;
@@ -909,6 +970,14 @@ svg.addEventListener('pointermove', e => {
   else if (ui.pan) {
     if (Math.hypot(px - ui.pan.sx, py - ui.pan.sy) > 3) ui.pan.moved = true;
     view.cx = ui.pan.cx - (px - ui.pan.sx) / view.s; view.cy = ui.pan.cy - (py - ui.pan.sy) / view.s; renderMap();
+  } else if (ui.wmDrag) {
+    const d = ui.wmDrag;
+    if (!d.moved && Math.hypot(px - d.sx, py - d.sy) < 4) return;
+    d.moved = true;
+    if (!d.undone) { pushUndo(); d.undone = true; }
+    const [cx, cy] = screenToDisp(px, py);
+    d.w.x = Math.round((d.ox - (cy - d.d0y)) * 10) / 10; d.w.y = Math.round((d.oy - (cx - d.d0x)) * 10) / 10;
+    renderMap();
   } else if (ui.drag) {
     const d = ui.drag;
     if (!d.moved && Math.hypot(px - d.sx, py - d.sy) < 4) return;
@@ -940,13 +1009,24 @@ function endPointer() {
     setSel(null); renderMulti(); renderInspector(); renderMap();     // a click on the background clears the selection
   }
   if (ui.drag && ui.drag.moved) { renderPackList(); renderInspector(); buildMapSelectKeep(); renderMulti(); }
-  ui.drag = null; ui.pan = null; svg.classList.remove('panning');
+  if (ui.wmDrag && ui.wmDrag.moved) { renderInspector(); renderStats(); }
+  ui.wmDrag = null; ui.drag = null; ui.pan = null; svg.classList.remove('panning');
 }
 svg.addEventListener('pointerup', endPointer);
 svg.addEventListener('pointercancel', endPointer);
 function buildMapSelectKeep() { const cur = ui.curMap; buildMapSelect(); $('mapSel').value = cur; }
 
 function placeAt(px, py) {
+  if (String(ui.placing).startsWith('wm:')) {
+    const which = ui.placing.slice(3), pk = selPack(); ui.placing = null; hideHint();
+    if (!pk) return;
+    pushUndo();
+    const [wx, wy] = dispToWorld(...screenToDisp(px, py));
+    const x = Math.round(wx * 10) / 10, y = Math.round(wy * 10) / 10;
+    if (which === 'new') pk.wm.push({ name: 'Location ' + (pk.wm.length + 1), slot: 0, map: ui.curMap, x, y, z: 0 });
+    else { const w = pk.wm[+which]; if (w) { if (w.map !== ui.curMap) w.z = 0; w.map = ui.curMap; w.x = x; w.y = y; } }
+    renderAll(); return;
+  }
   const f = findMob(ui.placing); ui.placing = null; hideHint();
   if (!f) return;
   pushUndo();

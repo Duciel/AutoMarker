@@ -50,6 +50,18 @@ Many pre-defined groups exists already in the addon but can be customized with t
 Summons and script adds (e.g. Lava Spawn) get a new GUID every time, so they are useless in a pack. Names listed in the `ignoredNames = { ... }` block of `AutoMarker_Config.txt` are never auto-added (case insensitive, `Lava Spawn` is there by default).
 `/am ignore [name]` (target if no name), `/am unignore [name]`, `/am ignorelist` (opens the list window: add a typed name or the target, remove with the x), or the **Ignore target** / **Ignore list** buttons of the editor. The **Clean config** button of the list window removes from the configuration every UNMARKED mob whose name is ignored (marked mobs are kept) and the auto-created packs left empty.
 
+### Locations and world markers (WeirdUtils)
+* A pack can have named positions ("locations") that are not tied to a mob. Each one can get a WeirdUtils world marker (1-5):
+  they are placed with the pack (`/am next`, marking a pack from a target, the editor's Mark button) when `worldmarkers.dll` of
+  [WeirdUtils](https://codeberg.org/MarcelineVQ/WeirdUtils) is loaded and you are leader/assist, on the same map only.
+  They are independent of the raid marks on mobs: a pack can have both.
+* In game: editor > **Locations** window. "Add here" stores your current position (not marked), the left button picks its world marker
+  (left / right click = next / previous, one location per marker), the box renames it, "Here" moves it to where you stand, x deletes it.
+* Commands: `/am wm` lists them, `/am wm add [name]`, `/am wm <1-5> [target]` (world marker N at your / the target's position),
+  `/am wm <1-5> clear`, `/am wm place`, `/am wm on|off`. `/am clearmarks` also clears the placed world markers.
+* Config: `["location:1"] = { name = "Tank spot", worldmark = 2, map = 533, x = .., y = .., z = .. },` inside the pack (`worldmark = 0`: no marker).
+* The out-of-game editor shows them as diamonds (number = world marker, drag to move) and lets you add, rename, set the icon, move and delete them.
+
 ### Mob positions
 * Each mob of `NPCList.lua` carries its name and spawn position: `{ mark = SKULL, name = "Venom Stalker", map = 0, x = 0, y = 0 }`
   (map = `Map.dbc` id, e.g. 533 = Naxxramas, x / y = world coordinates in yards, 0 = unknown), to identify it again later.

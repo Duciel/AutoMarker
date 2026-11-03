@@ -208,6 +208,48 @@ local function MarkUnit(unit,mark)
   return false
 end
 
+-- /// WeirdUtils world markers /// ---------------------------------------------
+-- Needs worldmarkers.dll (https://codeberg.org/MarcelineVQ/WeirdUtils). They are independent of the raid
+-- marks on units: a pack can have both, and a world marker never replaces the mark of a mob.
+local wmarks = {}            -- zone -> pack -> array of locations { name =, slot = 0-5, map =, x =, y =, z = } (slot = WeirdUtils world marker, 0 = none; global file)
+local ReadUnitPosition, GetCurrentMapId   -- defined further down
+local wm_swap = nil       -- nil = unknown; true when the DLL's x / y are swapped compared with UnitPosition
+local wm_placed = false
+
+local function WorldMarksActive()
+  if AutoMarkerDB and AutoMarkerDB.settings and AutoMarkerDB.settings.worldMarks == false then return false end
+  return type(WorldMarker) == "function" and type(GetWeirdUtilsVersion) == "function"
+    and GetWeirdUtilsVersion("worldmarkers") ~= nil
+end
+
+-- places every world marker of the pack; returns the number placed
+local function PlaceWorldMarks(zone, packName)
+  local w = zone and packName and wmarks[zone] and wmarks[zone][packName]
+  if not w or not next(w) or not WorldMarksActive() then return 0 end
+  local curMap = GetCurrentMapId()
+  local pmap, px, py, pz = ReadUnitPosition("player")
+  local n = 0
+  for _, e in ipairs(w) do
+    local slot = e.slot or 0
+    if slot >= 1 and (not curMap or curMap == 0 or e.map == 0 or e.map == curMap) then
+      if wm_swap == nil and pmap then
+        -- the first placement tells whether the DLL uses the same x / y order as UnitPosition
+        local ok, wx, wy = pcall(WorldMarker, slot, "player")
+        if ok and tonumber(wx) and tonumber(wy) then
+          wm_swap = (math.abs(wx - py) + math.abs(wy - px)) < (math.abs(wx - px) + math.abs(wy - py))
+        end
+      end
+      local x, y = e.x, e.y
+      if wm_swap then x, y = e.y, e.x end
+      local z = e.z
+      if not z or z == 0 then z = pz or 0 end
+      local ok, r = pcall(WorldMarker, slot, x, y, z)
+      if ok and r ~= nil and r ~= -1 then n = n + 1; wm_placed = true end
+    end
+  end
+  return n
+end
+
 local function MarkPack(pack)
   for guid,mark in pairs(pack) do
     if UnitExists(guid) then
@@ -217,6 +259,10 @@ local function MarkPack(pack)
 end
 
 function AutoMarker_ClearMarks()
+  if wm_placed and WorldMarksActive() and type(ClearWorldMarker) == "function" then
+    pcall(ClearWorldMarker)
+    wm_placed = false
+  end
   local markfunc = InGroup() and
     SetRaidTarget or
     function (t,m) SetRaidTarget(t,m,1) end
@@ -457,7 +503,7 @@ end
 
 -- /// Positions /// --
 -- Current map id (Map.dbc row: 0 Eastern Kingdoms, 1 Kalimdor, 409 Molten Core, 533 Naxxramas...)
-local function GetCurrentMapId()
+function GetCurrentMapId()
   if type(GetInstanceInfo) == "function" then
     -- ClassicAPI: name, type, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, instanceID
     local ok, _, _, _, _, _, _, _, id = pcall(GetInstanceInfo)
@@ -474,20 +520,20 @@ end
 local PATROL_MIN_DIST = 12   -- yards from every known point before a new waypoint is stored
 local PATROL_MAX_POINTS = 60   -- extra waypoints kept per mob
 
-local function ReadUnitPosition(unit)
+function ReadUnitPosition(unit)
   if type(UnitPosition) ~= "function" or not unit then return nil end
   local ok, a, b, c, d = pcall(UnitPosition, unit)
   if not ok or not tonumber(a) or not tonumber(b) then return nil end
   if a == 0 and b == 0 then return nil end
-  local x, y, map
+  local x, y, z, map
   if tonumber(d) then
     -- ClassicAPI shape: posY, posX, posZ, mapID
-    x, y, map = b, a, tonumber(d)
+    x, y, z, map = b, a, c, tonumber(d)
   else
     -- SuperWoW shape: x, y, z
-    x, y = a, b
+    x, y, z = a, b, c
   end
-  return map or GetCurrentMapId(), Round1(x), Round1(y)
+  return map or GetCurrentMapId(), Round1(x), Round1(y), Round1(tonumber(z) or 0)
 end
 
 -- returns map, x, y of the recorded position, or nil when it is missing / null
@@ -601,6 +647,7 @@ local function SerializeConfig()
     "-- mark: SKULL, CROSS, SQUARE, MOON, TRIANGLE, DIAMOND, CIRCLE, STAR, UNMARKED",
     "-- map / x / y: spawn position (Map.dbc id, world coordinates in yards), 0 = not recorded yet:",
     "-- it is filled the first time the mob is targeted out of combat (alive); path = \"x,y;x,y\" lists patrol waypoints.",
+    "-- [\"location:N\"] = { name, worldmark = 0-5, map, x, y, z }: a named position of the pack (no mob); worldmark 1-5 = WeirdUtils world marker placed there.",
     "-- Written by the addon (/am save) and read back on login (/am reload): hand edits are fine, keep one entry per line.",
   }
   local maps = SortedKeys(mapInfo)
@@ -646,6 +693,13 @@ local function SerializeConfig()
       for _, guid in ipairs(guids) do
         tinsert(out, EntryLine(guid, tonumber(pack[guid]) or 0))
         written[guid] = true
+      end
+      local w = wmarks[zone] and wmarks[zone][packName]
+      if w then
+        for i, e in ipairs(w) do
+          tinsert(out, format("  [\"location:%d\"] = { name = %s, worldmark = %d, map = %d, x = %.1f, y = %.1f, z = %.1f },",
+            i, LuaQuote(e.name or ""), e.slot or 0, e.map or 0, e.x, e.y, e.z or 0))
+        end
       end
       tinsert(out, "})")
     end
@@ -700,6 +754,7 @@ end
 local function ParseConfig(text)
   if not text or text == "" then return nil end
   local packs, names, positions, maps = {}, {}, {}, {}
+  local wm = {}
   local ignoredList -- nil when the file has no ignoredNames block
 
   if not sfind(text, "NpcsToMark", 1, true) and not sfind(text, "npcPositions", 1, true) then
@@ -749,6 +804,31 @@ local function ParseConfig(text)
       block = nil
     elseif block and ssub(line, 1, 1) == "[" then
       local guid, after = ReadQuoted(line, 2)
+      local _, _, wslot = sfind(guid or "", "^worldmarker:(%d)$")
+      if guid and (wslot or sfind(guid, "^location:")) then
+        if block == "pack" and zone and packName then
+          local lbody = " " .. ssub(line, after or 1)
+          local lname = ""
+          local _, lne = sfind(lbody, "[%s{,]name%s*=%s*")
+          if lne then
+            local nm, qe = ReadQuoted(lbody, lne + 1)
+            if nm and qe then lname = nm; lbody = ssub(lbody, 1, lne) .. ssub(lbody, qe) end
+          end
+          local _, _, wmap = sfind(lbody, "[%s{,]map%s*=%s*(%-?[%d%.]+)")
+          local _, _, wx = sfind(lbody, "[%s{,]x%s*=%s*(%-?[%d%.]+)")
+          local _, _, wy = sfind(lbody, "[%s{,]y%s*=%s*(%-?[%d%.]+)")
+          local _, _, wz = sfind(lbody, "[%s{,]z%s*=%s*(%-?[%d%.]+)")
+          local _, _, wsl = sfind(lbody, "[%s{,]worldmark%s*=%s*(%d)")
+          local slot = tonumber(wslot) or tonumber(wsl) or 0
+          if slot > 5 then slot = 0 end
+          if tonumber(wx) and tonumber(wy) then
+            wm[zone] = wm[zone] or {}
+            wm[zone][packName] = wm[zone][packName] or {}
+            tinsert(wm[zone][packName], { name = lname, slot = slot, map = tonumber(wmap) or 0, x = tonumber(wx), y = tonumber(wy), z = tonumber(wz) or 0 })
+          end
+        end
+        guid = nil
+      end
       if guid and guid ~= "" then
         local body = " " .. ssub(line, after or 1)
         -- name: `name = "..."` field, or the comment of the old layout
@@ -795,7 +875,7 @@ local function ParseConfig(text)
       end
     end
   end
-  return packs, names, positions, false, maps, ignoredList
+  return packs, names, positions, false, maps, ignoredList, wm
 end
 
 -- copies every default pack (NPCList.lua) that the configuration doesn't have yet
@@ -974,6 +1054,7 @@ function AutoMarker_MarkGroup()
   if targetGuid and not UnitIsDead(targetGuid) and PlayerCanMark() then
     local pack, packMobs = guidToPack(targetGuid, GetRealZoneText())
     MarkPack(packMobs or {})
+    PlaceWorldMarks(GetRealZoneText(), pack)
     last_pack_marked = pack
   end
 end
@@ -988,6 +1069,7 @@ function AutoMarker_MarkNextGroup()
         if nextPack and nextPack.instance == zone then
           auto_print(L["Marking: "] .. nextPack.packName)
           MarkPack(currentNpcsToMark[zone][nextPack.packName])
+          PlaceWorldMarks(zone, nextPack.packName)
           last_pack_marked = nextPack.packName
           break
         end
@@ -1461,7 +1543,7 @@ function autoMarker:Initialize()
   end
 
   -- global configuration file, shared by every account and character
-  local filePacks, fileNames, filePos, fileLegacy, fileMaps, fileIgnored = LoadGlobalConfig()
+  local filePacks, fileNames, filePos, fileLegacy, fileMaps, fileIgnored, fileWm = LoadGlobalConfig()
   if filePacks then
     -- first run of this account with the global file: keep its own customs that the file doesn't know
     if not AutoMarkerDB.migratedToGlobal then
@@ -1478,6 +1560,7 @@ function autoMarker:Initialize()
     -- empty file: start from NPCList.lua
     if not next(filePacks) and PopulateFromDefaults(filePacks) > 0 then save_dirty = true end
     AutoMarkerDB.customNpcsToMark = filePacks
+    wmarks = fileWm or {}
     for g, n in pairs(fileNames) do npcNames[g] = n end
     for g, p in pairs(filePos) do npcPos[g] = p end
     for id, m in pairs(fileMaps or {}) do mapInfo[id] = m end
@@ -2055,6 +2138,7 @@ function API.RenamePack(zone, old, new)
   local customs = AutoMarkerDB.customNpcsToMark[zone]
   if not (customs and customs[old]) then return false, L["pack not found"] end
   customs[new], customs[old] = customs[old], nil
+  if wmarks[zone] and wmarks[zone][old] then wmarks[zone][new], wmarks[zone][old] = wmarks[zone][old], nil end
   currentNpcsToMark[zone][new], currentNpcsToMark[zone][old] = customs[new], nil
   if last_pack_marked == old then last_pack_marked = new end
   if sweepPackName == old then sweepPackName = new end
@@ -2064,6 +2148,7 @@ end
 
 -- default pack: back to its NPCList.lua version / custom pack: deletes it
 function API.ResetPack(zone, pack)
+  if wmarks[zone] then wmarks[zone][pack] = nil end
   if AutoMarkerDB.customNpcsToMark[zone] then AutoMarkerDB.customNpcsToMark[zone][pack] = nil end
   if currentNpcsToMark[zone] then currentNpcsToMark[zone][pack] = nil end
   if defaultNpcsToMark[zone] and defaultNpcsToMark[zone][pack] then
@@ -2079,11 +2164,82 @@ function API.MarkPack(zone, pack)
   local t = API.GetPack(zone, pack)
   if t and PlayerCanMark() then
     MarkPack(t)
+    PlaceWorldMarks(zone, pack)
     last_pack_marked = pack
   end
 end
 
 function API.ClearMarks() AutoMarker_ClearMarks() end
+
+function API.WorldMarksActive() return WorldMarksActive() end
+function API.GetLocations(zone, pack) return wmarks[zone] and wmarks[zone][pack] end
+local function LocList(zone, pack, create)
+  if create then
+    EnsureCustomPack(zone, pack)
+    wmarks[zone] = wmarks[zone] or {}
+    wmarks[zone][pack] = wmarks[zone][pack] or {}
+  end
+  return wmarks[zone] and wmarks[zone][pack]
+end
+local function CleanLocName(n) n = string.gsub(n or "", "[\t\r\n]", " "); return (string.gsub(n, "^%s*(.-)%s*$", "%1")) end
+-- adds a named, not yet marked location at the position of `unit` (default: the player); returns its index
+function API.AddLocation(zone, pack, name, unit, slot)
+  local map, x, y, z = ReadUnitPosition(unit or "player")
+  if not map then return nil end
+  local t = LocList(zone, pack, true)
+  name = CleanLocName(name)
+  if name == "" then name = "Location " .. (table.getn(t) + 1) end
+  tinsert(t, { name = name, slot = 0, map = map, x = x, y = y, z = z or 0 })
+  if slot then API.SetLocationSlot(zone, pack, table.getn(t), slot) end
+  MarkConfigDirty()
+  return table.getn(t)
+end
+function API.SetLocationSlot(zone, pack, i, slot)
+  local t = LocList(zone, pack)
+  slot = tonumber(slot) or 0
+  if not (t and t[i]) or slot < 0 or slot > 5 then return false end
+  if slot > 0 then
+    for j, e in ipairs(t) do if j ~= i and e.slot == slot then e.slot = 0 end end -- one location per world marker
+  end
+  t[i].slot = slot
+  MarkConfigDirty()
+  return true
+end
+function API.RenameLocation(zone, pack, i, name)
+  local t = LocList(zone, pack)
+  name = CleanLocName(name)
+  if not (t and t[i]) or name == "" then return false end
+  t[i].name = name
+  MarkConfigDirty()
+  return true
+end
+function API.MoveLocation(zone, pack, i, unit)
+  local t = LocList(zone, pack)
+  local map, x, y, z = ReadUnitPosition(unit or "player")
+  if not (t and t[i] and map) then return false end
+  t[i].map, t[i].x, t[i].y, t[i].z = map, x, y, z or 0
+  MarkConfigDirty()
+  return true
+end
+function API.RemoveLocation(zone, pack, i)
+  local t = LocList(zone, pack)
+  if not (t and t[i]) then return false end
+  tremove(t, i)
+  if not t[1] then wmarks[zone][pack] = nil end
+  MarkConfigDirty()
+  return true
+end
+-- world marker N of the pack at the position of `unit`: updates the location that has it, or adds one
+function API.SetWorldMark(zone, pack, slot, unit)
+  slot = tonumber(slot)
+  if not slot or slot < 1 or slot > 5 then return false end
+  local t = LocList(zone, pack)
+  for i, e in ipairs(t or {}) do
+    if e.slot == slot then return API.MoveLocation(zone, pack, i, unit) end
+  end
+  return API.AddLocation(zone, pack, "World marker " .. slot, unit, slot) and true or false
+end
+function API.PlaceWorldMarks(zone, pack) return PlaceWorldMarks(zone, pack) end
 
 function API.SetSweep(pack)
   sweep_on = pack and true or false
@@ -2107,7 +2263,7 @@ function API.PopulateFromDefaults()
 end
 
 function API.ReloadGlobal()
-  local packs, names, positions, legacy, maps, ignoredFromFile = LoadGlobalConfig()
+  local packs, names, positions, legacy, maps, ignoredFromFile, wmFromFile = LoadGlobalConfig()
   if not packs then return false end
   -- back to defaults, then apply the file
   for zone, ps in pairs(AutoMarkerDB.customNpcsToMark) do
@@ -2119,6 +2275,7 @@ function API.ReloadGlobal()
   end
   if not next(packs) and PopulateFromDefaults(packs) > 0 then legacy = true end
   AutoMarkerDB.customNpcsToMark = packs
+  wmarks = wmFromFile or {}
   for zone, ps in pairs(packs) do
     currentNpcsToMark[zone] = currentNpcsToMark[zone] or {}
     for p, t in pairs(ps) do currentNpcsToMark[zone][p] = t end
@@ -2260,6 +2417,41 @@ local function handleCommands(msg, editbox)
       auto_print(format(L["Position of %s: map %d, x %s, y %s"], UnitName(guid) or guid, map, x, y))
     else
       auto_print(L["Unable to read the position of the target."])
+    end
+  elseif command == "wm" or command == "worldmark" then
+    local pk = last_pack_marked
+    local tg = getGuid()
+    if tg then pk = guidToPack(tg, zoneName) or pk end
+    local sub = args[2]
+    local active = API.WorldMarksActive()
+    if sub == "off" or sub == "on" then
+      AutoMarkerDB.settings.worldMarks = (sub == "on")
+      auto_print("World markers (WeirdUtils): " .. (sub == "on" and c("on", color.green) or c("off", color.red)))
+    elseif not pk then
+      auto_print("World markers: target a mob of a pack (or mark a pack) first.")
+    elseif sub == "place" then
+      auto_print(format("World markers placed: %d (%s)", API.PlaceWorldMarks(zoneName, pk), pk))
+    elseif sub == "add" then
+      local nm = table.concat(args, " ", 3)
+      local i = API.AddLocation(zoneName, pk, nm)
+      auto_print(i and format("Location %d added to %s at your position (open /am ui > Locations to name it or pick its icon).", i, pk) or "Unable to read your position.")
+    elseif tonumber(sub) and tonumber(sub) >= 1 and tonumber(sub) <= 5 then
+      local slot = tonumber(sub)
+      if args[3] == "clear" then
+        local done
+        for i, e in ipairs(API.GetLocations(zoneName, pk) or {}) do if e.slot == slot then API.SetLocationSlot(zoneName, pk, i, 0) done = true end end
+        auto_print(done and format("World marker %d unassigned in %s.", slot, pk) or "Nothing to clear.")
+      else
+        local unit = (args[3] == "target") and "target" or "player"
+        auto_print(API.SetWorldMark(zoneName, pk, slot, unit) and format("World marker %d of %s set at the %s position.", slot, pk, unit) or "Unable to read the position.")
+      end
+    else
+      auto_print("World markers (WeirdUtils worldmarkers.dll): " .. (active and c("active", color.green) or c("not available", color.red)))
+      for i, e in ipairs(API.GetLocations(zoneName, pk) or {}) do
+        auto_print(format("  %d. %s  [%s]  map %d, x %.1f, y %.1f, z %.1f", i, e.name, (e.slot or 0) > 0 and ("marker " .. e.slot) or "no marker", e.map, e.x, e.y, e.z or 0))
+      end
+      auto_print("/am wm add [name] - add a location at your position;  /am wm <1-5> [target] - world marker N at your (or the target's) position")
+      auto_print("/am wm <1-5> clear | place | on | off   (names and icons: /am ui > Locations)")
     end
   elseif command == "populate" then
     auto_print(format(L["%d default packs added to the configuration."], API.PopulateFromDefaults()))

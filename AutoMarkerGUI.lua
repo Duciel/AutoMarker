@@ -620,6 +620,10 @@ local function CreateGUI()
     L["Show the list of ignored mob names (add / remove)."])
   ignoreListBtn:SetPoint("LEFT", ignoreBtn, "RIGHT", 4, 0)
 
+  local locBtn = Button(f, "Locations", 90, function() AutoMarker_ToggleLocationsGUI() end,
+    "Named positions of this pack (no mob), each can get a world marker (WeirdUtils worldmarkers.dll).")
+  locBtn:SetPoint("LEFT", ignoreListBtn, "RIGHT", 4, 0)
+
   local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   hint:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 14)
   hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -18, 14)
@@ -841,6 +845,198 @@ function AutoMarker_ToggleIgnoreGUI()
   if ignoreGui:IsShown() then ignoreGui:Hide() else ignoreGui:Show() end
 end
 
+-- Locations window ---------------------------------------------------------------
+-- Named positions of the current pack (no mob). Each one can get a WeirdUtils world marker (1-5) that is placed with the pack.
+
+local LC_ROWS = 8
+local LC_ROW_H = 26
+local LC_WIDTH = 380
+local locGui
+local WM_COLORS = { [0] = "|cff808080", "|cffffff00", "|cffff8000", "|cff00ff00", "|cff00b0ff", "|cffff40ff" }
+
+local function LocName(i, e) return e.name ~= "" and e.name or ("Location " .. i) end
+
+local function RefreshLocs()
+  if not locGui or not locGui:IsShown() then return end
+  local zone, pack = state.zone, state.pack
+  local list = pack and API.GetLocations(zone, pack) or {}
+  local total = getn(list)
+  locGui.packText:SetText(pack and ("|cffffd100" .. pack .. "|r  (" .. total .. ")") or "|cff808080(no pack selected in the editor)|r")
+  locGui.status:SetText(API.WorldMarksActive() and "|cff33ff33WeirdUtils world markers: active|r" or "|cffff8000WeirdUtils worldmarkers.dll not detected: icons are saved but not placed|r")
+  if pack then locGui.addBtn:Enable() else locGui.addBtn:Disable() end
+  FauxScrollFrame_Update(locGui.scroll, total, LC_ROWS, LC_ROW_H)
+  local offset = tonumber(FauxScrollFrame_GetOffset(locGui.scroll)) or 0
+  local pmap, px, py = API.GetPlayerPos()
+  for i = 1, LC_ROWS do
+    local row = locGui.rows[i]
+    local idx = offset + i
+    local e = list[idx]
+    if e then
+      row.idx = idx
+      local slot = e.slot or 0
+      row.icon:SetText(slot > 0 and (WM_COLORS[slot] .. slot .. "|r") or WM_COLORS[0] .. "-|r")
+      if not row.box.editing then row.box:SetText(e.name or "") end
+      if pmap and pmap == e.map then
+        row.dist:SetText(format("%d yd", math.floor(math.sqrt((px - e.x) * (px - e.x) + (py - e.y) * (py - e.y)) + 0.5)))
+      else
+        row.dist:SetText("")
+      end
+      row:Show()
+    else
+      row.idx = nil
+      row:Hide()
+    end
+  end
+end
+
+local function CreateLocationsGUI()
+  local f = CreateFrame("Frame", "AutoMarkerLocations", UIParent)
+  f:SetWidth(LC_WIDTH)
+  f:SetHeight(130 + LC_ROWS * LC_ROW_H + 40)
+  f:SetFrameStrata("DIALOG")
+  f:SetToplevel(true)
+  f:EnableMouse(true)
+  f:SetMovable(true)
+  f:SetClampedToScreen(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function() this:StartMoving() end)
+  f:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
+  f:SetPoint("CENTER", UIParent, "CENTER", 60, 20)
+  Skin(f, "frame")
+  tinsert(UISpecialFrames, "AutoMarkerLocations")
+
+  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  title:SetPoint("TOP", f, "TOP", 0, -16)
+  title:SetText("AutoMarker - Locations")
+
+  local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+  close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+  Skin(close, "close")
+
+  f.packText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  f.packText:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -38)
+
+  f.status = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  f.status:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -54)
+
+  f.addBtn = Button(f, "Add here", 80, function()
+    if not state.pack then return end
+    local i = API.AddLocation(state.zone, state.pack, nil)
+    if not i then API.Print("Unable to read your position.") end
+  end, "Adds a location (not marked) at your current position.\nThen pick its icon with the button on the left and rename it.")
+  f.addBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -74)
+
+  local placeBtn = Button(f, "Place now", 80, function()
+    if state.pack then API.Print(format("World markers placed: %d", API.PlaceWorldMarks(state.zone, state.pack))) end
+  end, "Places the world markers of this pack now (they are also placed when the pack is marked).")
+  placeBtn:SetPoint("LEFT", f.addBtn, "RIGHT", 4, 0)
+
+  local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  hint:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -100)
+  hint:SetText("Icon: left / right click = next / previous world marker.  Enter in the name box saves.")
+
+  local scroll = CreateFrame("ScrollFrame", "AutoMarkerLocationsScroll", f, "FauxScrollFrameTemplate")
+  scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -118)
+  scroll:SetWidth(LC_WIDTH - 50)
+  scroll:SetHeight(LC_ROWS * LC_ROW_H)
+  scroll:SetScript("OnVerticalScroll", function() FauxScrollFrame_OnVerticalScroll(LC_ROW_H, RefreshLocs) end)
+  f.scroll = scroll
+  scroll.offset = 0
+  if pfUI and pfUI.api and pfUI.api.SkinScrollbar then
+    pcall(pfUI.api.SkinScrollbar, getglobal("AutoMarkerLocationsScrollScrollBar"))
+  end
+
+  f.rows = {}
+  for i = 1, LC_ROWS do
+    local row = CreateFrame("Frame", nil, f)
+    row:SetWidth(LC_WIDTH - 50)
+    row:SetHeight(LC_ROW_H)
+    row:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -118 - (i - 1) * LC_ROW_H)
+
+    local icon = Button(row, "-", 26, function()
+      local r = this:GetParent()
+      if not r.idx then return end
+      local list = API.GetLocations(state.zone, state.pack) or {}
+      local e = list[r.idx]
+      if not e then return end
+      local slot = (e.slot or 0) + ((arg1 == "RightButton") and -1 or 1)
+      if slot > 5 then slot = 0 elseif slot < 0 then slot = 5 end
+      API.SetLocationSlot(state.zone, state.pack, r.idx, slot)
+    end, "World marker of this position (0 = none).\nLeft click: next - right click: previous.")
+    icon:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    icon:SetPoint("LEFT", row, "LEFT", 0, 0)
+    row.icon = icon
+
+    local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+    box:SetWidth(150)
+    box:SetHeight(20)
+    box:SetPoint("LEFT", icon, "RIGHT", 10, 0)
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(40)
+    box:SetScript("OnEditFocusGained", function() this.editing = true end)
+    box:SetScript("OnEditFocusLost", function()
+      this.editing = nil
+      local r = this:GetParent()
+      if r.idx and state.pack then API.RenameLocation(state.zone, state.pack, r.idx, this:GetText()) end
+    end)
+    box:SetScript("OnEnterPressed", function() this:ClearFocus() end)
+    box:SetScript("OnEscapePressed", function() this.editing = nil; this:ClearFocus(); RefreshLocs() end)
+    row.box = box
+
+    row.dist = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.dist:SetPoint("LEFT", box, "RIGHT", 6, 0)
+    row.dist:SetWidth(50)
+    row.dist:SetJustifyH("LEFT")
+
+    local del = CreateFrame("Button", nil, row)
+    del:SetWidth(16)
+    del:SetHeight(16)
+    del:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+    del:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+    del:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+    del:SetScript("OnClick", function()
+      local r = this:GetParent()
+      if r.idx and state.pack then API.RemoveLocation(state.zone, state.pack, r.idx) end
+    end)
+    del:SetScript("OnEnter", function()
+      GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+      GameTooltip:SetText("Delete this location", 1, 1, 1)
+      GameTooltip:Show()
+    end)
+    del:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    local here = Button(row, "Here", 38, function()
+      local r = this:GetParent()
+      if r.idx and state.pack then
+        if not API.MoveLocation(state.zone, state.pack, r.idx) then API.Print("Unable to read your position.") end
+      end
+    end, "Move this location to your current position.")
+    here:SetPoint("RIGHT", del, "LEFT", -2, 0)
+    row:Hide()
+    f.rows[i] = row
+  end
+
+  f:EnableMouseWheel(true)
+  f:SetScript("OnMouseWheel", function()
+    local bar = getglobal("AutoMarkerLocationsScrollScrollBar")
+    if bar and scroll:IsShown() then bar:SetValue(bar:GetValue() - arg1 * LC_ROW_H * 3) end
+  end)
+  f.elapsed = 0
+  f:SetScript("OnUpdate", function()
+    this.elapsed = this.elapsed + arg1
+    if this.elapsed > 1 then this.elapsed = 0; RefreshLocs() end
+  end)
+  f:SetScript("OnShow", function() RefreshLocs() end)
+  f:Hide()
+  return f
+end
+
+function AutoMarker_ToggleLocationsGUI()
+  if not AutoMarkerDB then return end
+  if not locGui then locGui = CreateLocationsGUI() end
+  if locGui:IsShown() then locGui:Hide() else locGui:Show() end
+end
+
 -- Public ----------------------------------------------------------------------
 
 function AutoMarker_ToggleGUI()
@@ -849,7 +1045,7 @@ function AutoMarker_ToggleGUI()
   if gui:IsShown() then gui:Hide() else gui:Show() end
 end
 
-API.OnDataChanged = function() Refresh() RefreshIgnore() end
+API.OnDataChanged = function() Refresh() RefreshIgnore() RefreshLocs() end
 API.OnTargetChanged = function() FollowTarget(false) end
 
 -- Minimap button ----------------------------------------------------------------
