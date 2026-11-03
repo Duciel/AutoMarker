@@ -1,0 +1,1161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoMarker Map Editor</title>
+<script src="maps/index.js" onerror="void 0"></script>
+<script src="maps/calibration.js" onerror="void 0"></script>
+<style>
+:root {
+  --bg: #f3f2ef; --panel: #ffffff; --panel2: #f7f6f3; --ink: #1d1d1b; --muted: #6b6a66; --line: #d9d7d1;
+  --accent: #1f6feb; --accent-ink: #ffffff; --danger: #c0392b; --warn: #b7791f;
+  --map: #20242b; --grid: rgba(255,255,255,.07); --grid2: rgba(255,255,255,.16); --maptext: #aab2bf;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16171a; --panel: #1f2125; --panel2: #25282d; --ink: #e8e6e1; --muted: #9a9892; --line: #34373d;
+    --accent: #4c8dff; --accent-ink: #0b0d10; --danger: #ef6c5d; --warn: #e0a643;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #16171a; --panel: #1f2125; --panel2: #25282d; --ink: #e8e6e1; --muted: #9a9892; --line: #34373d;
+  --accent: #4c8dff; --accent-ink: #0b0d10; --danger: #ef6c5d; --warn: #e0a643;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; border-color: var(--line); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button.danger { color: var(--danger); }
+button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+input[type=text], input[type=search], select, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; min-width: 0; }
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 14px; margin: 0 8px 0 0; font-weight: 700; }
+header .spacer { flex: 1; }
+#stats { color: var(--muted); }
+#dirty { color: var(--warn); font-weight: 600; }
+main { flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr) 370px; min-height: 0; }
+aside { background: var(--panel); overflow: auto; min-height: 0; }
+#left { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+#right { border-left: 1px solid var(--line); }
+.sec { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.sec h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.row + .row { margin-top: 6px; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); }
+label.chk { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
+#packs { flex: 1; overflow: auto; min-height: 120px; }
+.zone { padding: 6px 12px 3px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); position: sticky; top: 0; background: var(--panel); }
+.pack { display: flex; align-items: center; gap: 8px; padding: 5px 12px; cursor: pointer; border-left: 3px solid transparent; }
+.pack:hover { background: var(--panel2); }
+.pack.sel { background: var(--panel2); border-left-color: var(--accent); }
+.pack .sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.pack .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pack .ct { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.pack .un { color: var(--danger); font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 600; }
+.pack.noplace .nm { color: var(--muted); }
+#stage { position: relative; min-width: 0; min-height: 0; background: var(--map); overflow: hidden; }
+#svg { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; user-select: none; }
+#svg.panning { cursor: grabbing; }
+#svg text, #svg polygon, #svg line, #svg image { pointer-events: none; }
+#svg.pick { cursor: crosshair; }
+#hud { position: absolute; left: 10px; bottom: 8px; right: 10px; display: flex; gap: 12px; justify-content: space-between; pointer-events: none; color: var(--maptext); font-size: 12px; }
+#hud span { background: rgba(0,0,0,.45); padding: 2px 8px; border-radius: 4px; }
+#hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--accent); color: var(--accent-ink); padding: 4px 12px; border-radius: 6px; font-weight: 600; display: none; max-width: 90%; text-align: center; }
+#empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--maptext); text-align: center; padding: 24px; pointer-events: none; }
+#empty div { max-width: 420px; }
+#empty b { color: #fff; }
+.mobrow { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin-bottom: 6px; background: var(--panel); }
+.mobrow.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.mobrow .top { display: flex; align-items: center; gap: 6px; }
+.mobrow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-weight: 600; }
+.mobrow .gid { color: var(--muted); font: 11px ui-monospace, Consolas, monospace; }
+.mobrow .marks { display: flex; gap: 2px; margin-top: 5px; flex-wrap: wrap; }
+.mobrow .tools { display: flex; gap: 6px; margin-top: 5px; align-items: center; }
+.mobrow select { flex: 1; min-width: 0; }
+.mk { width: 26px; height: 26px; padding: 2px; display: inline-flex; align-items: center; justify-content: center; background: var(--panel2); }
+.mk svg { width: 18px; height: 18px; }
+.mk.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--panel); }
+.pill { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+textarea { width: 100%; min-height: 80px; font: 12px ui-monospace, Consolas, monospace; resize: vertical; }
+.small { font-size: 12px; }
+@media (max-width: 1100px) {
+  main { grid-template-columns: 240px minmax(0, 1fr); }
+  #right { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); max-height: 45vh; }
+}
+@media (max-width: 700px) {
+  body { height: auto; }
+  main { display: block; }
+  #stage { height: 60vh; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="sym-0" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="#8a8f98" stroke-width="1.4"/><path d="M4 12L12 4" stroke="#8a8f98" stroke-width="1.4"/></symbol>
+    <symbol id="sym-1" viewBox="0 0 16 16"><polygon points="8,1 9.9,5.8 15,6.1 11,9.4 12.4,14.6 8,11.7 3.6,14.6 5,9.4 1,6.1 6.1,5.8" fill="#f5d02e" stroke="#7a6410" stroke-width=".6"/></symbol>
+    <symbol id="sym-2" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#f39a1f" stroke="#7a4a08" stroke-width=".6"/></symbol>
+    <symbol id="sym-3" viewBox="0 0 16 16"><polygon points="8,1 14.5,8 8,15 1.5,8" fill="#b84bd6" stroke="#4e1a60" stroke-width=".6"/></symbol>
+    <symbol id="sym-4" viewBox="0 0 16 16"><polygon points="8,1.5 14.5,13.5 1.5,13.5" fill="#34c24a" stroke="#14591f" stroke-width=".6"/></symbol>
+    <symbol id="sym-5" viewBox="0 0 16 16"><path d="M10.5 1.5A6.8 6.8 0 1 0 14.5 11 5.6 5.6 0 0 1 10.5 1.5Z" fill="#d6dcf5" stroke="#4a5280" stroke-width=".6"/></symbol>
+    <symbol id="sym-6" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1.5" fill="#3d7bd9" stroke="#143a73" stroke-width=".6"/></symbol>
+    <symbol id="sym-7" viewBox="0 0 16 16"><path d="M3 3L13 13M13 3L3 13" stroke="#e5322d" stroke-width="3.2" stroke-linecap="round"/></symbol>
+    <symbol id="sym-8" viewBox="0 0 16 16"><path d="M8 1.5C4.7 1.5 2.5 3.8 2.5 6.8c0 1.8.8 3 1.9 3.8V13c0 .5.4.9.9.9h5.4c.5 0 .9-.4.9-.9v-2.4c1.1-.8 1.9-2 1.9-3.8 0-3-2.2-5.3-5.5-5.3Z" fill="#f2f2f2" stroke="#555" stroke-width=".6"/><circle cx="5.7" cy="7.3" r="1.5" fill="#222"/><circle cx="10.3" cy="7.3" r="1.5" fill="#222"/><path d="M8 9.3l-.9 1.6h1.8z" fill="#222"/><path d="M6.4 12.8v-1.4M8 12.8v-1.4M9.6 12.8v-1.4" stroke="#222" stroke-width=".8"/></symbol>
+  </defs>
+</svg>
+
+<header>
+  <h1>AutoMarker Map Editor</h1>
+  <button id="btnOpen" class="primary">Open config…</button>
+  <input type="file" id="fileIn" accept=".txt,.lua,text/plain" hidden>
+  <button id="btnSaveFile" class="primary" disabled title="Overwrite the opened file (Ctrl+S). Close the game first.">Save</button>
+  <button id="btnSave" disabled title="Download the edited config as a new file">Download copy</button>
+  <label class="chk small muted" title="Downloads the original file once before the first overwrite"><input type="checkbox" id="optBackup" checked> backup</label>
+  <button id="btnUndo" disabled>Undo</button>
+  <span id="dirty"></span><span id="toast" class="small" style="color:var(--accent)"></span>
+  <span class="spacer"></span>
+  <span id="stats" class="muted">No file loaded</span>
+  <button id="btnTheme" title="Switch light / dark">Theme</button>
+</header>
+
+<main>
+  <aside id="left">
+    <div class="sec">
+      <h2>Map</h2>
+      <div class="row"><select id="mapSel" class="grow"></select></div>
+      <div class="small muted" style="margin-bottom:6px">Ctrl+click: multi-select &middot; Shift+drag: box select &middot; drag a selected mob to move them all &middot; middle or right button drag: pan, wheel: zoom</div>
+      <div class="row">
+        <button id="btnFit" title="Zoom to the mobs of this map">Fit view</button>
+        <label class="chk"><input type="checkbox" id="optLabels" checked> names</label>
+        <label class="chk"><input type="checkbox" id="optFocus" checked> dim other packs</label>
+      </div>
+    </div>
+    <div class="sec">
+      <h2>Background image</h2>
+      <div class="row"><select id="bgPick" class="grow" title="Bundled image used for this map"></select></div>
+      <div class="row">
+        <button id="btnBg">Load image…</button>
+        <input type="file" id="bgIn" accept="image/*" hidden>
+        <button id="btnCal" disabled>Calibrate</button>
+        <button id="btnBgClear" class="danger" disabled title="Remove the image you loaded yourself for this map">Remove</button>
+      </div>
+      <div class="row"><button id="btnCalExport" title="Writes calibration.js with every bundled image calibrated in this browser (put it in the maps folder)">Export calibrations…</button></div>
+      <div class="row small"><span class="muted">Opacity</span><input type="range" id="bgOpacity" min="10" max="100" value="70" class="grow"></div>
+      <div id="bgInfo" class="small muted" style="margin-top:4px">None for this map.</div>
+    </div>
+    <div class="sec">
+      <h2>Packs</h2>
+      <div class="row">
+        <input type="search" id="search" class="grow" placeholder="Search pack or mob name">
+      </div>
+      <div class="row">
+        <select id="packFilter" class="grow">
+          <option value="all">All packs</option>
+          <option value="unmarked">Packs with unmarked mobs</option>
+          <option value="unplaced">Packs with unplaced mobs</option>
+        </select>
+      </div>
+    </div>
+    <div id="packs"></div>
+  </aside>
+
+  <section id="stage">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="hint"></div>
+    <div id="empty"><div><b>Open your AutoMarker_Config.txt</b><br>It is in the <code>Imports</code> folder of the game (drag the file onto this page, or use the button). Close the game before putting the edited file back, then use <code>/am reload</code>.</div></div>
+    <div id="hud"><span id="cursor"></span><span id="scaleinfo"></span></div>
+  </section>
+
+  <aside id="right">
+    <div class="sec" id="multiBox" style="display:none"></div>
+    <div class="sec" id="inspector"><div class="muted">Select a pack in the list or click a mob on the map.</div></div>
+    <div class="sec">
+      <h2>Ignored mob names</h2>
+      <textarea id="ignoredBox" placeholder="One name per line" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="btnIgnApply">Apply list</button>
+        <button id="btnIgnClean" title="Remove every UNMARKED mob whose name is in the list">Remove unmarked ignored mobs</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script>
+'use strict';
+/* ===================== data ===================== */
+const MARK_NAMES = ['UNMARKED','STAR','CIRCLE','DIAMOND','TRIANGLE','MOON','SQUARE','CROSS','SKULL'];
+const MARK_VALUE = {}; MARK_NAMES.forEach((n, i) => { MARK_VALUE[n] = i; });
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const hasPos = m => (m.x !== 0 || m.y !== 0);
+
+let db = null;                 // { maps, ignored, zones:[{name,packs:[{name,zone,mobs:[]}]}], orphans, eol }
+let fileName = 'AutoMarker_Config.txt';
+let dirty = false;
+const undoStack = [];
+const ui = { curMap: null, selZone: null, selPack: null, selGuid: null, multi: new Set(), box: null, placing: null, calib: null,
+             bg: null, bgOpacity: 0.7, drag: null, pan: null, cursor: null };
+const view = { cx: 0, cy: 0, s: 1 };
+
+/* ===================== parsing ===================== */
+function readQuoted(s, pos) {
+  const q = s[pos];
+  if (q !== '"' && q !== "'") return null;
+  let out = '', i = pos + 1;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '\\') { const n = s[i + 1]; out += (n === 'n' ? '\n' : n); i += 2; }
+    else if (ch === q) return [out, i + 1];
+    else { out += ch; i++; }
+  }
+  return null;
+}
+
+// patrol waypoints: path = "x,y;x,y" (extra points besides x / y), [] when none
+function parsePath(body) {
+  const r = body.match(/[\s{,]path\s*=\s*["']([^"']*)["']/), out = [];
+  if (!r) return out;
+  const re = /(-?[\d.]+)\s*,\s*(-?[\d.]+)/g; let k;
+  while ((k = re.exec(r[1]))) out.push([parseFloat(k[1]), parseFloat(k[2])]);
+  return out;
+}
+function pathStr(m) { return m.path && m.path.length ? ', path = "' + m.path.map(q => q[0].toFixed(1) + ',' + q[1].toFixed(1)).join(';') + '"' : ''; }
+function parseConfig(text) {
+  const out = { maps: {}, ignored: [], zones: [], orphans: [], eol: text.indexOf('\r\n') >= 0 ? '\r\n' : '\n' };
+  const zoneByName = {};
+  let pack = null, block = null, seen = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('--')) continue;
+    let m;
+    if (/^addTo\w*NpcsToMark\s*\(/.test(line)) {
+      let z = null, p = null, after = null;
+      const q1 = line.search(/["']/);
+      if (q1 >= 0) { const r = readQuoted(line, q1); if (r) { z = r[0]; after = r[1]; } }
+      if (after !== null) {
+        const rel = line.slice(after).search(/["']/);
+        if (rel >= 0) { const r = readQuoted(line, after + rel); if (r) p = r[0]; }
+      }
+      if (z !== null && p !== null) {
+        let zone = zoneByName[z];
+        if (!zone) { zone = { name: z, packs: [] }; zoneByName[z] = zone; out.zones.push(zone); }
+        pack = zone.packs.find(x => x.name === p);
+        if (!pack) { pack = { name: p, zone: z, mobs: [] }; zone.packs.push(pack); }
+        block = 'pack';
+      } else { block = null; pack = null; }
+      if (/\}\s*\)\s*;?\s*$/.test(line)) block = null;
+    } else if (/^npcPositions\s*=\s*\{/.test(line)) {
+      block = 'positions';
+    } else if (/^mapInfo\s*=\s*\{/.test(line)) {
+      block = 'maps';
+    } else if (/^ignoredNames\s*=\s*\{/.test(line)) {
+      block = 'ignored';
+      if (/\}\s*;?\s*$/.test(line)) block = null;
+    } else if (block === 'maps' && (m = line.match(/^\[\s*(\d+)\s*\]/))) {
+      const ne = line.match(/[\s{,]name\s*=\s*/);
+      const nm = ne ? readQuoted(line, ne.index + ne[0].length) : null;
+      const ty = line.match(/[\s{,]type\s*=\s*["'](\w+)["']/);
+      if (ty) out.maps[m[1]] = { name: nm ? nm[0] : '', type: ty[1] };
+    } else if (line[0] === '}') {
+      block = null;
+    } else if (block === 'ignored' && (line[0] === '"' || line[0] === "'")) {
+      const r = readQuoted(line, 0);
+      if (r && r[0]) out.ignored.push(r[0]);
+    } else if (block && line[0] === '[') {
+      const g = readQuoted(line, 1);
+      if (!g || !g[0]) continue;
+      const guid = g[0];
+      let body = ' ' + line.slice(g[1]);
+      let name = '';
+      const ne = body.match(/[\s{,]name\s*=\s*/);
+      if (ne) {
+        const r = readQuoted(body, ne.index + ne[0].length);
+        if (r) { name = r[0]; body = body.slice(0, ne.index + 1) + body.slice(r[1]); }
+      }
+      const cut = body.indexOf('--');
+      if (cut >= 0) {
+        if (!name) name = body.slice(cut + 2).trim();
+        body = body.slice(0, cut);
+      }
+      const num = k => { const r = body.match(new RegExp('[\\s{,]' + k + '\\s*=\\s*(-?[\\d.]+)')); return r ? parseFloat(r[1]) : 0; };
+      let x = num('x'), y = num('y'), map = num('map');
+      if (x === 0 && y === 0) map = 0;
+      if (block === 'positions') {
+        out.orphans.push({ guid, name, map, x, y, path: parsePath(body) });
+      } else if (pack) {
+        let val = body.match(/[\s{,]mark\s*=\s*([\w]+)/);
+        if (!val) val = body.match(/^\s*\]?\s*=\s*(\w+)/);
+        let mark = val ? (MARK_VALUE[val[1]] !== undefined ? MARK_VALUE[val[1]] : parseInt(val[1], 10)) : 0;
+        if (!(mark >= 0 && mark <= 8)) mark = 0;
+        pack.mobs.push({ guid, mark, name, map, x, y, path: parsePath(body) });
+        seen++;
+      }
+    }
+  }
+  return out;
+}
+
+/* ===================== serialising (same layout as the addon) ===================== */
+function luaQuote(s) {
+  return '"' + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]/g, ' ') + '"';
+}
+function entryLine(m) {
+  const p = hasPos(m);
+  return '  [' + luaQuote(m.guid) + '] = { mark = ' + (MARK_NAMES[m.mark] || 'UNMARKED') + ', name = ' + luaQuote(m.name) +
+    ', map = ' + (p ? Math.round(m.map) : 0) + ', x = ' + (p ? m.x.toFixed(1) : '0') + ', y = ' + (p ? m.y.toFixed(1) : '0') + (p ? pathStr(m) : '') + ' },';
+}
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+function serialize(d) {
+  const out = [
+    '-- AutoMarker - global configuration, shared by every account and character.',
+    '-- Same layout as NPCList.lua: each block replaces the default pack of the same name, or adds a new pack.',
+    '-- mark: SKULL, CROSS, SQUARE, MOON, TRIANGLE, DIAMOND, CIRCLE, STAR, UNMARKED',
+    '-- map / x / y: spawn position (Map.dbc id, world coordinates in yards), 0 = not recorded yet:',
+    '-- it is filled the first time the mob is targeted out of combat (alive); path = "x,y;x,y" lists patrol waypoints.',
+    '-- Written by the addon (/am save) and read back on login (/am reload): hand edits are fine, keep one entry per line.',
+  ];
+  const ids = Object.keys(d.maps).map(Number).sort((a, b) => a - b);
+  if (ids.length) {
+    out.push('', '--/////////////// Maps ///////////////',
+      '-- type: raid, party (dungeon) or pvp, recorded the first time the instance is entered', '', 'mapInfo = {');
+    for (const id of ids) out.push('  [' + id + '] = { name = ' + luaQuote(d.maps[id].name) + ', type = ' + luaQuote(d.maps[id].type) + ' },');
+    out.push('}');
+  }
+  out.push('', '--/////////////// Ignored mobs ///////////////',
+    '-- names never added automatically (summons, adds...), one quoted name per line, case insensitive', '', 'ignoredNames = {');
+  for (const n of [...d.ignored].sort(cmp)) out.push('  ' + luaQuote(n) + ',');
+  out.push('}');
+  const zones = d.zones.filter(z => z.packs.length).sort((a, b) => cmp(a.name, b.name));
+  for (const z of zones) {
+    out.push('', '--/////////////// ' + z.name.replace(/[\r\n]/g, ' ') + ' ///////////////');
+    for (const p of z.packs) {
+      out.push('', 'addToCustomNpcsToMark(' + luaQuote(z.name) + ', ' + luaQuote(p.name) + ', {');
+      const mobs = [...p.mobs].sort((a, b) => (a.mark !== b.mark ? b.mark - a.mark : cmp(a.guid, b.guid)));
+      for (const m of mobs) out.push(entryLine(m));
+      out.push('})');
+    }
+  }
+  const inPack = new Set();
+  for (const z of d.zones) for (const p of z.packs) for (const m of p.mobs) inPack.add(m.guid);
+  const orph = d.orphans.filter(o => !inPack.has(o.guid)).sort((a, b) => cmp(a.guid, b.guid));
+  if (orph.length) {
+    out.push('', '--/////////////// Positions of mobs in no pack ///////////////', '', 'npcPositions = {');
+    for (const o of orph) out.push('  [' + luaQuote(o.guid) + '] = { name = ' + luaQuote(o.name) + ', map = ' + Math.round(o.map) +
+      ', x = ' + o.x.toFixed(1) + ', y = ' + o.y.toFixed(1) + pathStr(o) + ' },');
+    out.push('}');
+  }
+  return out.join(d.eol) + d.eol;
+}
+
+/* ===================== helpers ===================== */
+function allPacks() { const r = []; if (db) for (const z of db.zones) for (const p of z.packs) r.push(p); return r; }
+function findPack(zone, name) { const z = db && db.zones.find(x => x.name === zone); return z ? z.packs.find(p => p.name === name) : null; }
+function setSel(g) { ui.selGuid = g || null; ui.multi = g ? new Set([g]) : new Set(); }
+function selPack() { return ui.selPack ? findPack(ui.selZone, ui.selPack) : null; }
+function findMob(guid) { for (const p of allPacks()) { const m = p.mobs.find(x => x.guid === guid); if (m) return { mob: m, pack: p }; } return null; }
+function hueOf(s) { let h = 7; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return (h * 47) % 360; }
+function packColor(p, a) { return 'hsla(' + hueOf(p.zone + '/' + p.name) + ',70%,62%,' + (a == null ? 1 : a) + ')'; }
+function mapLabel(id) { const m = db.maps[id]; return (m && m.name ? m.name : 'Map ' + id) + ' (' + id + (m && m.type ? ', ' + m.type : '') + ')'; }
+function mobsOnMap(id) { const r = []; for (const p of allPacks()) for (const m of p.mobs) if (hasPos(m) && m.map === id) r.push({ m, p }); return r; }
+
+function pushUndo() {
+  undoStack.push(JSON.stringify({ maps: db.maps, ignored: db.ignored, zones: db.zones, orphans: db.orphans }));
+  if (undoStack.length > 80) undoStack.shift();
+  setDirty(true);
+}
+function undo() {
+  const s = undoStack.pop();
+  if (!s) return;
+  const o = JSON.parse(s);
+  db = Object.assign(db, o);
+  setDirty(true);
+  renderAll();
+}
+function setDirty(v) {
+  dirty = v;
+  $('dirty').textContent = v ? 'Unsaved changes' : '';
+  $('btnUndo').disabled = !undoStack.length;
+  $('btnSave').disabled = !db; $('btnSaveFile').disabled = !db;
+}
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+/* ===================== file io ===================== */
+let fileHandle = null, origText = '', backupDone = false;
+function loadText(text, name, handle) {
+  const parsed = parseConfig(text);
+  if (!parsed.zones.length && !parsed.orphans.length) {
+    alert('No pack found in this file. Is it the AutoMarker_Config.txt of the new layout (addToCustomNpcsToMark blocks)?');
+    return;
+  }
+  db = parsed; fileName = name || fileName; undoStack.length = 0; dirty = false;
+  fileHandle = handle || null; origText = text; backupDone = false;
+  ui.selZone = ui.selPack = null; setSel(null); ui.placing = null; ui.calib = null;
+  const ids = mapIds();
+  ui.curMap = ids.length ? ids[0] : null;
+  $('empty').style.display = 'none';
+  buildMapSelect();
+  loadBgForMap().then(() => { fitView(); renderAll(); });
+  setDirty(false);
+}
+function readFile(f, handle) {
+  const r = new FileReader();
+  r.onload = () => loadText(String(r.result), f.name, handle);
+  r.readAsText(f);
+}
+const PICKER_TYPES = [{ description: 'AutoMarker config', accept: { 'text/plain': ['.txt', '.lua'] } }];
+$('btnOpen').onclick = async () => {
+  if (window.showOpenFilePicker) {            // Chrome / Edge: keeps a handle so that Save can overwrite the file
+    try { const [h] = await showOpenFilePicker({ types: PICKER_TYPES }); readFile(await h.getFile(), h); }
+    catch (e) { if (!e || e.name !== 'AbortError') $('fileIn').click(); }
+  } else $('fileIn').click();
+};
+$('fileIn').onchange = e => { if (e.target.files[0]) readFile(e.target.files[0]); e.target.value = ''; };
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', async e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  if (/^image\//.test(f.type) && db) { loadBgFile(f); return; }
+  const it = e.dataTransfer.items && e.dataTransfer.items[0];
+  const hp = it && it.getAsFileSystemHandle ? it.getAsFileSystemHandle() : null;   // must be requested during the event
+  let h = null;
+  try { const hh = hp ? await hp : null; if (hh && hh.kind === 'file') h = hh; } catch (err) { /* no handle: Save will ask for a file */ }
+  readFile(f, h);
+});
+function downloadText(text, name) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name || 'AutoMarker_Config.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+let toastTimer = 0;
+function toast(t) { $('toast').textContent = t; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 9000); }
+$('btnSave').onclick = () => { if (!db) return; downloadText(serialize(db)); setDirty(false); toast('Downloaded a copy.'); };
+async function saveToFile() {
+  if (!db) return;
+  const text = serialize(db);
+  try {
+    if (!fileHandle && window.showSaveFilePicker) fileHandle = await showSaveFilePicker({ suggestedName: 'AutoMarker_Config.txt', types: PICKER_TYPES });
+    if (!fileHandle) { downloadText(text); setDirty(false); toast('This browser cannot overwrite files, a copy was downloaded (Chrome or Edge can overwrite).'); return; }
+    if (fileHandle.requestPermission) {
+      const perm = await fileHandle.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') { toast('Write permission refused.'); return; }
+    }
+    if ($('optBackup').checked && !backupDone && origText) { downloadText(origText, 'AutoMarker_Config.backup.txt'); backupDone = true; }
+    const w = await fileHandle.createWritable(); await w.write(text); await w.close();
+    setDirty(false);
+    toast('Saved ' + fileHandle.name + ' at ' + new Date().toLocaleTimeString() + ' - the game must be closed; then /am reload.');
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    toast('Save failed: ' + (e && e.message ? e.message : e));
+  }
+}
+$('btnSaveFile').onclick = saveToFile;
+$('btnUndo').onclick = undo;
+$('btnTheme').onclick = () => {
+  const r = document.documentElement;
+  const dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  r.dataset.theme = dark ? 'light' : 'dark';
+};
+
+/* ===================== maps / packs lists ===================== */
+function mapIds() {
+  const c = {};
+  for (const p of allPacks()) for (const m of p.mobs) if (hasPos(m)) c[m.map] = (c[m.map] || 0) + 1;
+  for (const id of Object.keys(db.maps)) if (!(id in c)) c[id] = 0;
+  for (const o of db.orphans) if (hasPos(o) && !(o.map in c)) c[o.map] = 0;
+  return Object.keys(c).map(Number).sort((a, b) => c[b] - c[a] || a - b);
+}
+function buildMapSelect() {
+  const sel = $('mapSel'); sel.innerHTML = '';
+  for (const id of mapIds()) {
+    const n = mobsOnMap(id).length;
+    const o = document.createElement('option');
+    o.value = id; o.textContent = mapLabel(id) + ' - ' + n + ' placed';
+    sel.appendChild(o);
+  }
+  if (ui.curMap !== null) sel.value = ui.curMap;
+}
+$('mapSel').onchange = e => {
+  ui.curMap = Number(e.target.value); ui.placing = null; ui.calib = null;
+  loadBgForMap().then(() => { fitView(); renderAll(); });
+};
+
+function zonesOfMap() {
+  const zs = new Set();
+  for (const p of allPacks()) for (const m of p.mobs) if (hasPos(m) && m.map === ui.curMap) zs.add(p.zone);
+  return zs;
+}
+function packStats(p) {
+  let placed = 0, here = 0, un = 0, unplaced = 0;
+  for (const m of p.mobs) {
+    if (hasPos(m)) { placed++; if (m.map === ui.curMap) here++; } else unplaced++;
+    if (m.mark === 0) un++;
+  }
+  return { total: p.mobs.length, placed, here, un, unplaced };
+}
+function renderPackList() {
+  const box = $('packs');
+  if (!db || ui.curMap === null) { box.innerHTML = ''; return; }
+  const q = $('search').value.trim().toLowerCase();
+  const filt = $('packFilter').value;
+  const zs = zonesOfMap();
+  let html = '';
+  for (const z of db.zones) {
+    if (!zs.has(z.name)) continue;
+    let part = '';
+    for (const p of z.packs) {
+      const st = packStats(p);
+      if (q && !(p.name.toLowerCase().includes(q) || p.mobs.some(m => m.name.toLowerCase().includes(q)))) continue;
+      if (filt === 'unmarked' && !st.un) continue;
+      if (filt === 'unplaced' && !st.unplaced) continue;
+      const sel = (ui.selZone === z.name && ui.selPack === p.name) ? ' sel' : '';
+      part += '<div class="pack' + sel + (st.here ? '' : ' noplace') + '" data-zone="' + esc(z.name) + '" data-pack="' + esc(p.name) + '">' +
+        '<span class="sw" style="background:' + packColor(p) + '"></span><span class="nm" title="' + esc(p.name) + '">' + esc(p.name) + '</span>' +
+        (st.un ? '<span class="un" title="unmarked mobs">' + st.un + '∅</span>' : '') +
+        '<span class="ct" title="placed on this map / total">' + st.here + '/' + st.total + '</span></div>';
+    }
+    if (part) html += '<div class="zone">' + esc(z.name) + '</div>' + part;
+  }
+  box.innerHTML = html || '<div class="sec muted">No pack matches.</div>';
+}
+$('packs').addEventListener('click', e => {
+  const el = e.target.closest('.pack'); if (!el) return;
+  if (e.ctrlKey || e.metaKey) {                       // Ctrl + click: add the placed mobs of the pack to the selection
+    const pk = findPack(el.dataset.zone, el.dataset.pack); if (!pk) return;
+    if (ui.selGuid && !ui.multi.size) ui.multi.add(ui.selGuid);
+    for (const m of pk.mobs) if (hasPos(m) && m.map === ui.curMap) { ui.multi.add(m.guid); ui.selGuid = m.guid; }
+    renderMulti(); renderMap(); return;
+  }
+  selectPack(el.dataset.zone, el.dataset.pack, true);
+});
+$('search').oninput = () => { renderPackList(); renderMap(); };
+$('packFilter').onchange = renderPackList;
+$('optLabels').onchange = renderMap;
+$('optFocus').onchange = renderMap;
+
+function selectPack(zone, pack, fit) {
+  ui.selZone = zone; ui.selPack = pack; setSel(null);
+  renderPackList(); renderInspector(); renderMap();
+  if (fit) fitView(true);
+}
+
+/* ===================== inspector ===================== */
+function markButtons(cur) {
+  let h = '';
+  for (let v = 8; v >= 0; v--) h += '<button class="mk' + (v === cur ? ' on' : '') + '" data-mark="' + v + '" title="' + MARK_NAMES[v] + ' (' + v + ')"><svg><use href="#sym-' + v + '"/></svg></button>';
+  return h;
+}
+function renderInspector() {
+  const box = $('inspector');
+  const p = selPack();
+  if (!p) { box.innerHTML = '<div class="muted">Select a pack in the list or click a mob on the map.</div>'; return; }
+  const zone = db.zones.find(z => z.name === p.zone);
+  const mobs = [...p.mobs].sort((a, b) => (a.mark !== b.mark ? b.mark - a.mark : cmp(a.name, b.name) || cmp(a.guid, b.guid)));
+  let h = '<h2>Pack</h2><div class="row"><b class="grow" style="font-size:15px">' + esc(p.name) + '</b><span class="pill">' + esc(p.zone) + '</span></div>' +
+    '<div class="row"><input type="text" id="renameBox" class="grow" value="' + esc(p.name) + '"><button id="btnRename">Rename</button><button id="btnDelPack" class="danger">Delete</button></div>' +
+    '<div class="row"><span class="muted small">All mobs:</span><span class="marks" id="bulkMarks" style="display:flex;gap:2px;flex-wrap:wrap">' + markButtons(-1) + '</span></div>' +
+    '<div class="row"><input type="text" id="newPackBox" class="grow" placeholder="New pack in this zone"><button id="btnNewPack">Create</button></div>' +
+    '<h2 style="margin-top:12px">Mobs (' + p.mobs.length + ')</h2>';
+  for (const m of mobs) {
+    const placed = hasPos(m);
+    h += '<div class="mobrow' + (m.guid === ui.selGuid ? ' sel' : '') + '" data-guid="' + esc(m.guid) + '">' +
+      '<div class="top"><span class="name" data-act="focus" title="' + esc(m.name) + '">' + esc(m.name || '(no name)') + '</span>' +
+      '<span class="gid" title="' + esc(m.guid) + '">…' + esc(m.guid.slice(-6)) + '</span>' +
+      (m.path && m.path.length ? '<span class="pill" title="Patrol: ' + m.path.length + ' extra waypoint(s) shown as a dashed line">patrol ' + (m.path.length + 1) + ' pts</span>' : '') + (placed ? '<span class="pill" title="Map ' + m.map + ' x ' + m.x.toFixed(1) + ' y ' + m.y.toFixed(1) + '">placed</span>' : '<span class="pill warn">no position</span>') + '</div>' +
+      '<div class="marks">' + markButtons(m.mark) + '</div>' +
+      '<div class="tools"><button data-act="place" title="Then click on the map">' + (placed ? 'Move…' : 'Place…') + '</button>' +
+      '<select data-act="move" title="Move to another pack of this zone"><option value="">Move to pack…</option>' +
+      zone.packs.filter(x => x !== p).map(x => '<option value="' + esc(x.name) + '">' + esc(x.name) + '</option>').join('') + '</select>' +
+      (m.path && m.path.length ? '<button data-act="clearpath" title="Forget the patrol waypoints, keep the main position">No patrol</button>' : '') +
+      '<button data-act="del" class="danger" title="Remove from the configuration">×</button></div></div>';
+  }
+  box.innerHTML = h;
+  const sel = box.querySelector('.mobrow.sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+$('inspector').addEventListener('click', e => {
+  const p = selPack(); if (!p) return;
+  const t = e.target;
+  if (t.id === 'btnRename') {
+    const n = $('renameBox').value.trim();
+    if (!n || n === p.name) return;
+    if (findPack(p.zone, n)) { alert('A pack with this name already exists in this zone.'); return; }
+    pushUndo(); p.name = n; ui.selPack = n; renderAll(); return;
+  }
+  if (t.id === 'btnDelPack') {
+    if (!confirm('Delete the pack "' + p.name + '" and its ' + p.mobs.length + ' mob(s) from the configuration?')) return;
+    pushUndo();
+    const z = db.zones.find(x => x.name === p.zone); z.packs = z.packs.filter(x => x !== p);
+    ui.selPack = null; setSel(null); renderAll(); return;
+  }
+  if (t.id === 'btnNewPack') {
+    const n = $('newPackBox').value.trim(); if (!n) return;
+    if (findPack(p.zone, n)) { alert('A pack with this name already exists in this zone.'); return; }
+    pushUndo(); db.zones.find(x => x.name === p.zone).packs.push({ name: n, zone: p.zone, mobs: [] });
+    ui.selPack = n; renderAll(); return;
+  }
+  const mk = t.closest('.mk');
+  if (mk) {
+    const v = Number(mk.dataset.mark);
+    const row = mk.closest('.mobrow');
+    pushUndo();
+    if (row) { const f = p.mobs.find(m => m.guid === row.dataset.guid); if (f) { f.mark = v; setSel(f.guid); } }
+    else for (const m of p.mobs) m.mark = v;
+    renderAll(); return;
+  }
+  const row = t.closest('.mobrow');
+  const act = t.dataset.act || (t.closest('[data-act]') || {}).dataset?.act;
+  if (row && act) {
+    const m = p.mobs.find(x => x.guid === row.dataset.guid); if (!m) return;
+    if (act === 'focus') { setSel(m.guid); renderMulti(); renderInspector(); renderMap(); if (hasPos(m) && m.map === ui.curMap) centerOn(m); }
+    else if (act === 'clearpath') { pushUndo(); for (const pk of allPacks()) for (const x of pk.mobs) if (x.guid === m.guid) x.path = []; for (const o of db.orphans) if (o.guid === m.guid) o.path = []; renderAll(); }
+    else if (act === 'del') { pushUndo(); p.mobs = p.mobs.filter(x => x !== m); if (ui.selGuid === m.guid) setSel(null); else ui.multi.delete(m.guid); renderAll(); }
+    else if (act === 'place') {
+      if (ui.curMap === null) return;
+      ui.placing = m.guid; setSel(m.guid); showHint('Click on the map to set the position of ' + (m.name || m.guid) + ' (middle or right button: pan, Esc: cancel)'); renderInspector(); renderMap();
+    }
+  } else if (row) { setSel(row.dataset.guid); renderMulti(); renderInspector(); renderMap(); }
+});
+$('inspector').addEventListener('change', e => {
+  const t = e.target; if (t.dataset.act !== 'move' || !t.value) return;
+  const p = selPack(); const row = t.closest('.mobrow'); if (!p || !row) return;
+  const m = p.mobs.find(x => x.guid === row.dataset.guid); const dest = findPack(p.zone, t.value);
+  if (!m || !dest) return;
+  pushUndo(); p.mobs = p.mobs.filter(x => x !== m); dest.mobs.push(m); renderAll();
+});
+
+/* ===== multi selection ===== */
+// a mob has one position, whatever the number of packs that list it (the addon stores positions by GUID)
+function setPosAll(guid, x, y, map) {
+  const mv = m => {
+    if (m.path && m.path.length && hasPos(m) && m.map === map) {   // patrol waypoints follow the mob
+      const dx = x - m.x, dy = y - m.y;
+      m.path = m.path.map(q => [Math.round((q[0] + dx) * 10) / 10, Math.round((q[1] + dy) * 10) / 10]);
+    }
+    m.x = x; m.y = y; m.map = map;
+  };
+  for (const pk of allPacks()) for (const m of pk.mobs) if (m.guid === guid) mv(m);
+  for (const o of db.orphans) if (o.guid === guid) mv(o);
+}
+function multiList() { const r = []; for (const g of ui.multi) { const f = findMob(g); if (f) r.push(f); } return r; }
+function renderMulti() {
+  const box = $('multiBox');
+  const list = multiList();
+  if (list.length < 2) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = '';
+  const counts = new Map(), zones = new Set();
+  for (const f of list) { counts.set(f.pack, (counts.get(f.pack) || 0) + 1); zones.add(f.pack.zone); }
+  const packs = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const sameZone = zones.size === 1;
+  const zoneName = sameZone ? [...zones][0] : '';
+  const zonePacks = sameZone ? (db.zones.find(z => z.name === zoneName) || { packs: [] }).packs : [];
+  const prev = $('mergeName') ? $('mergeName').value : '';
+  box.innerHTML = '<h2>Selection</h2><div class="row"><b>' + list.length + ' mobs</b><span class="muted small">from ' + packs.length + ' pack' + (packs.length > 1 ? 's' : '') + '</span><span class="grow"></span><button id="btnClearSel">Clear</button></div>' +
+    '<div class="small muted" style="margin:4px 0">' + packs.slice(0, 6).map(([p, n]) => esc(p.name) + ' ×' + n).join(', ') + (packs.length > 6 ? ', …' : '') + '</div>' +
+    '<div class="row"><span class="muted small">Marks:</span><span style="display:flex;gap:2px;flex-wrap:wrap" id="multiMarks">' + markButtons(-1) + '</span></div>' +
+    (sameZone
+      ? '<div class="row"><input type="text" id="mergeName" class="grow" list="mergeList" placeholder="Pack name" value="' + esc(prev || packs[0][0].name) + '"><datalist id="mergeList">' +
+        zonePacks.map(p => '<option value="' + esc(p.name) + '"></option>').join('') + '</datalist><button id="btnMerge" class="primary" title="Move the selected mobs into this pack (created if it does not exist)">Merge into pack</button></div>' +
+        '<div class="small muted">An existing name adds the mobs to that pack; a new name creates the pack. Auto-created packs left empty are removed.</div>'
+      : '<div class="small" style="color:var(--warn)">The selected mobs belong to different zones (' + zones.size + '): merging works inside one zone only.</div>');
+}
+$('multiBox').addEventListener('click', e => {
+  const t = e.target;
+  if (t.id === 'btnClearSel') { setSel(null); renderMulti(); renderInspector(); renderMap(); return; }
+  const mk = t.closest('.mk');
+  if (mk) { pushUndo(); for (const f of multiList()) f.mob.mark = Number(mk.dataset.mark); renderAll(); return; }
+  if (t.id === 'btnMerge') {
+    const list = multiList(); if (list.length < 2) return;
+    const zone = list[0].pack.zone; if (list.some(f => f.pack.zone !== zone)) return;
+    const name = $('mergeName').value.trim();
+    if (!name) { alert('Give a pack name.'); return; }
+    pushUndo();
+    const z = db.zones.find(x => x.name === zone);
+    let dest = z.packs.find(x => x.name === name);
+    if (!dest) { dest = { name, zone, mobs: [] }; z.packs.push(dest); }
+    const touched = new Set();
+    for (const g of [...ui.multi]) {                    // one entry per mob: drop it from every pack of the zone, then add it to the target
+      let proto = null;
+      for (const pk of z.packs) {
+        for (let i = pk.mobs.length - 1; i >= 0; i--) {
+          if (pk.mobs[i].guid !== g) continue;
+          if (!proto || pk === dest) proto = pk.mobs[i];
+          pk.mobs.splice(i, 1); touched.add(pk);
+        }
+      }
+      if (proto) dest.mobs.push(proto);
+    }
+    z.packs = z.packs.filter(p => p === dest || !(touched.has(p) && p.mobs.length === 0 && /^new_\d+$/.test(p.name)));
+    ui.selZone = zone; ui.selPack = name;
+    renderAll();
+  }
+});
+
+/* ignore list */
+function renderIgnored() { $('ignoredBox').value = db ? db.ignored.join('\n') : ''; }
+$('btnIgnApply').onclick = () => {
+  if (!db) return;
+  const seen = new Set(), list = [];
+  for (const l of $('ignoredBox').value.split(/\r?\n/)) { const n = l.trim(); if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); list.push(n); } }
+  pushUndo(); db.ignored = list; renderIgnored();
+};
+$('btnIgnClean').onclick = () => {
+  if (!db) return;
+  const ig = new Set(db.ignored.map(n => n.toLowerCase()));
+  let n = 0;
+  for (const p of allPacks()) for (const m of p.mobs) if (m.mark === 0 && ig.has(m.name.toLowerCase())) n++;
+  if (!n) { alert('No unmarked mob has an ignored name.'); return; }
+  if (!confirm('Remove ' + n + ' unmarked mob(s) with an ignored name? Marked mobs are kept. Packs left empty are deleted unless they are your only copy of a default pack: check before saving.')) return;
+  pushUndo();
+  for (const z of db.zones) {
+    for (const p of z.packs) { const before = p.mobs.length; p.mobs = p.mobs.filter(m => !(m.mark === 0 && ig.has(m.name.toLowerCase()))); p._emptied = before > 0 && p.mobs.length === 0; }
+    z.packs = z.packs.filter(p => !p._emptied);
+  }
+  ui.selPack = findPack(ui.selZone, ui.selPack) ? ui.selPack : null;
+  renderAll();
+};
+
+/* ===================== map rendering ===================== */
+const svg = $('svg');
+function W() { return svg.clientWidth || 800; }
+function H() { return svg.clientHeight || 600; }
+const worldToDisp = (x, y) => [-y, -x];
+const dispToWorld = (dx, dy) => [-dy, -dx];
+function dispToScreen(dx, dy) { return [(dx - view.cx) * view.s + W() / 2, (dy - view.cy) * view.s + H() / 2]; }
+function screenToDisp(px, py) { return [(px - W() / 2) / view.s + view.cx, (py - H() / 2) / view.s + view.cy]; }
+
+function bboxOfMap() {
+  const list = mobsOnMap(ui.curMap);
+  if (!list.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const { m } of list) { const [dx, dy] = worldToDisp(m.x, m.y); x0 = Math.min(x0, dx); x1 = Math.max(x1, dx); y0 = Math.min(y0, dy); y1 = Math.max(y1, dy); }
+  return { x0, y0, x1, y1 };
+}
+function fitView(selOnly) {
+  let list = mobsOnMap(ui.curMap);
+  if (selOnly) { const p = selPack(); if (p) { const l2 = list.filter(o => o.p === p); if (l2.length) list = l2; } }
+  if (!list.length) { view.cx = 0; view.cy = 0; view.s = 1; renderMap(); return; }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const { m } of list) { const [dx, dy] = worldToDisp(m.x, m.y); x0 = Math.min(x0, dx); x1 = Math.max(x1, dx); y0 = Math.min(y0, dy); y1 = Math.max(y1, dy); }
+  const w = Math.max(x1 - x0, 20), h = Math.max(y1 - y0, 20);
+  view.s = Math.min((W() - 120) / w, (H() - 120) / h, 20);
+  view.cx = (x0 + x1) / 2; view.cy = (y0 + y1) / 2;
+  renderMap();
+}
+function centerOn(m) { const [dx, dy] = worldToDisp(m.x, m.y); view.cx = dx; view.cy = dy; renderMap(); }
+$('btnFit').onclick = () => fitView(false);
+
+function niceStep(minYards) { for (const s of [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]) if (s >= minYards) return s; return 10000; }
+function hull(pts) {
+  if (pts.length < 3) return pts;
+  const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = []; for (const q of p) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  const up = []; for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+
+let raf = 0;
+function renderMap() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; drawMap(); }); }
+function drawMap() {
+  if (!db || ui.curMap === null) { svg.innerHTML = ''; return; }
+  const w = W(), h = H();
+  let s = '';
+  // grid (world aligned: lines of constant world x / y)
+  const step = niceStep(70 / view.s);
+  const [wx0, wy0] = dispToWorld(...screenToDisp(0, 0)), [wx1, wy1] = dispToWorld(...screenToDisp(w, h));
+  const yMin = Math.min(wy0, wy1), yMax = Math.max(wy0, wy1), xMin = Math.min(wx0, wx1), xMax = Math.max(wx0, wx1);
+  for (let gy = Math.ceil(yMin / step) * step; gy <= yMax; gy += step) {
+    const [px] = dispToScreen(-gy, 0);
+    s += '<line x1="' + px + '" y1="0" x2="' + px + '" y2="' + h + '" stroke="' + (gy % (step * 5) === 0 ? 'var(--grid2)' : 'var(--grid)') + '"/>';
+    s += '<text x="' + (px + 3) + '" y="12" fill="var(--maptext)" font-size="10">y ' + gy + '</text>';
+  }
+  for (let gx = Math.ceil(xMin / step) * step; gx <= xMax; gx += step) {
+    const [, py] = dispToScreen(0, -gx);
+    s += '<line x1="0" y1="' + py + '" x2="' + w + '" y2="' + py + '" stroke="' + (gx % (step * 5) === 0 ? 'var(--grid2)' : 'var(--grid)') + '"/>';
+    s += '<text x="4" y="' + (py - 3) + '" fill="var(--maptext)" font-size="10">x ' + gx + '</text>';
+  }
+  // background image
+  if (ui.bg && ui.bg.url) {
+    const T = ui.bg.T, k = view.s;
+    const ex = (T.tx - view.cx) * k + w / 2, ey = (T.ty - view.cy) * k + h / 2;
+    s += '<image href="' + ui.bg.url + '" x="0" y="0" width="' + ui.bg.w + '" height="' + ui.bg.h + '" opacity="' + ui.bgOpacity +
+      '" transform="matrix(' + T.a * k + ' ' + T.b * k + ' ' + (-T.b * k) + ' ' + T.a * k + ' ' + ex + ' ' + ey + ')" preserveAspectRatio="none"/>';
+  }
+  // packs
+  const q = $('search').value.trim().toLowerCase();
+  const list = mobsOnMap(ui.curMap);
+  const byPack = new Map();
+  for (const o of list) { if (!byPack.has(o.p)) byPack.set(o.p, []); byPack.get(o.p).push(o.m); }
+  const selP = selPack();
+  const dim = $('optFocus').checked && selP;
+  const labels = $('optLabels').checked;
+  let hulls = '', mobsSvg = '', texts = '';
+  for (const [p, ms] of byPack) {
+    const isSel = p === selP;
+    const op = dim && !isSel ? 0.35 : 1;
+    const pts = ms.map(m => dispToScreen(...worldToDisp(m.x, m.y)));
+    for (const m of ms) if (m.path && m.path.length) {
+      const wp = [[m.x, m.y]].concat(m.path).map(q => dispToScreen(...worldToDisp(q[0], q[1])));
+      hulls += '<polyline points="' + wp.map(a => a[0].toFixed(1) + ',' + a[1].toFixed(1)).join(' ') + '" fill="none" stroke="' + packColor(p) +
+        '" stroke-width="2" stroke-dasharray="6 4" opacity="' + op + '" pointer-events="none"/>';
+      for (const a of wp.slice(1)) hulls += '<circle cx="' + a[0].toFixed(1) + '" cy="' + a[1].toFixed(1) + '" r="4" fill="' + packColor(p) + '" opacity="' + op + '" pointer-events="none"/>';
+    }
+    const hp = hull(pts);
+    const pad = 14;
+    if (hp.length >= 3) hulls += '<polygon points="' + hp.map(a => a[0].toFixed(1) + ',' + a[1].toFixed(1)).join(' ') + '" fill="' + packColor(p, isSel ? .22 : .12) +
+      '" stroke="' + packColor(p, isSel ? .45 : .2) + '" stroke-width="' + (pad * 2) + '" stroke-linejoin="round" opacity="' + op + '"/>';
+    else if (hp.length === 2) hulls += '<line x1="' + hp[0][0] + '" y1="' + hp[0][1] + '" x2="' + hp[1][0] + '" y2="' + hp[1][1] + '" stroke="' + packColor(p, isSel ? .4 : .2) +
+      '" stroke-width="' + (pad * 2) + '" stroke-linecap="round" opacity="' + op + '"/>';
+    else hulls += '<circle cx="' + hp[0][0] + '" cy="' + hp[0][1] + '" r="' + pad + '" fill="' + packColor(p, isSel ? .35 : .18) + '" opacity="' + op + '"/>';
+    const cx = pts.reduce((a, b) => a + b[0], 0) / pts.length, cy = Math.min(...pts.map(a => a[1])) - pad - 4;
+    if (isSel || !dim) texts += '<text x="' + cx + '" y="' + cy + '" text-anchor="middle" fill="' + packColor(p) + '" font-size="11" font-weight="600" opacity="' + op +
+      '" stroke="rgba(0,0,0,.6)" stroke-width="3" paint-order="stroke">' + esc(p.name) + '</text>';
+    ms.forEach((m, i) => {
+      const [px, py] = pts[i];
+      if (px < -30 || py < -30 || px > w + 30 || py > h + 30) return;
+      const isMob = ui.multi.has(m.guid);
+      const hit = q && m.name.toLowerCase().includes(q);
+      mobsSvg += '<g class="mob" data-g="' + esc(m.guid) + '" transform="translate(' + px.toFixed(1) + ',' + py.toFixed(1) + ')" opacity="' + op + '" style="cursor:pointer">' +
+        '<circle r="' + (isMob ? 13 : 11) + '" fill="#14171c" stroke="' + (isMob ? '#fff' : packColor(p)) + '" stroke-width="' + (isMob || hit ? 3 : 2) + '"/>' +
+        (m.mark === 0 ? '<circle r="3" fill="' + packColor(p) + '"/>' : '<use href="#sym-' + m.mark + '" x="-8" y="-8" width="16" height="16" pointer-events="none"/>') +
+        (hit ? '<circle r="17" fill="none" stroke="#ffd43b" stroke-width="2" stroke-dasharray="3 3"/>' : '') + '</g>';
+      if (labels && (isSel || isMob || (!dim && view.s > 2.2))) texts += '<text x="' + (px + 15) + '" y="' + (py + 4) + '" fill="#e8e6e1" font-size="10" opacity="' + op +
+        '" stroke="rgba(0,0,0,.7)" stroke-width="3" paint-order="stroke" pointer-events="none">' + esc(m.name) + '</text>';
+    });
+  }
+  s += hulls + mobsSvg + texts;
+  // calibration markers
+  if (ui.calib && ui.bg) {
+    const T = ui.bg.T;
+    const toS = (u, v) => dispToScreen(T.a * u - T.b * v + T.tx, T.b * u + T.a * v + T.ty);
+    const cross = (px, py, c, label) => '<g stroke="' + c + '" stroke-width="2"><line x1="' + (px - 10) + '" y1="' + py + '" x2="' + (px + 10) + '" y2="' + py + '"/><line x1="' + px + '" y1="' + (py - 10) + '" x2="' + px + '" y2="' + (py + 10) + '"/></g><text x="' + (px + 12) + '" y="' + (py - 8) + '" fill="' + c + '" font-size="12" font-weight="700">' + label + '</text>';
+    ui.calib.pairs.forEach((pr, i) => { const [px, py] = toS(pr.u, pr.v); s += cross(px, py, '#ffd43b', String(i + 1)); });
+    if (ui.calib.pending) { const [px, py] = toS(ui.calib.pending.u, ui.calib.pending.v); s += cross(px, py, '#ff6b6b', '?'); }
+  }
+  if (ui.box) { const b = ui.box; s += '<rect x="' + Math.min(b.sx, b.cx) + '" y="' + Math.min(b.sy, b.cy) + '" width="' + Math.abs(b.cx - b.sx) + '" height="' + Math.abs(b.cy - b.sy) + '" fill="rgba(76,141,255,.15)" stroke="#4c8dff" stroke-dasharray="4 3"/>'; }
+  svg.innerHTML = s;
+  svg.classList.toggle('pick', !!(ui.placing || ui.calib));
+  $('scaleinfo').textContent = '1 px = ' + (1 / view.s).toFixed(2) + ' yd   -   grid ' + step + ' yd';
+  $('empty').style.display = 'none';
+}
+
+/* ===================== map interaction ===================== */
+function svgPoint(e) { const r = svg.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const [px, py] = svgPoint(e);
+  const [dx, dy] = screenToDisp(px, py);
+  view.s = Math.min(60, Math.max(0.05, view.s * Math.exp(-e.deltaY * 0.0015)));
+  view.cx = dx - (px - W() / 2) / view.s; view.cy = dy - (py - H() / 2) / view.s;
+  renderMap();
+}, { passive: false });
+
+svg.addEventListener('contextmenu', e => e.preventDefault());
+svg.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });   // no browser auto-scroll on middle click
+svg.addEventListener('pointerdown', e => {
+  if (!db) return;
+  const [px, py] = svgPoint(e);
+  if (e.button === 1 || e.button === 2) {          // middle / right button: pan, whatever the mode (calibration, placing...)
+    e.preventDefault();
+    svg.setPointerCapture(e.pointerId);
+    ui.pan = { sx: px, sy: py, cx: view.cx, cy: view.cy, moved: true, aux: true }; svg.classList.add('panning');
+    return;
+  }
+  if (e.button !== 0) return;
+  const g = e.target.closest('[data-g]');
+  const add = e.ctrlKey || e.metaKey;
+  if (ui.calib) { calibClick(px, py, g ? g.dataset.g : null); return; }
+  if (ui.placing) { placeAt(px, py); return; }
+  svg.setPointerCapture(e.pointerId);
+  if (g) {
+    const guid = g.dataset.g, found = findMob(guid);
+    if (!found) return;
+    if (add) {                                    // Ctrl / Cmd + click: add to / remove from the selection
+      if (ui.multi.has(guid)) { ui.multi.delete(guid); if (ui.selGuid === guid) ui.selGuid = ui.multi.size ? [...ui.multi][ui.multi.size - 1] : null; }
+      else { if (ui.selGuid && !ui.multi.size) ui.multi.add(ui.selGuid); ui.multi.add(guid); ui.selGuid = guid; }
+      renderMulti(); renderPackList(); renderMap(); return;
+    }
+    if (!ui.multi.has(guid)) { setSel(guid); }   // clicking a selected mob keeps the group so it can be dragged
+    else ui.selGuid = guid;
+    if (ui.selZone !== found.pack.zone || ui.selPack !== found.pack.name) { ui.selZone = found.pack.zone; ui.selPack = found.pack.name; }
+    const [d0x, d0y] = screenToDisp(px, py);
+    const origins = new Map();
+    for (const gg of ui.multi) { const f = findMob(gg); if (f && hasPos(f.mob) && f.mob.map === ui.curMap) origins.set(gg, { x: f.mob.x, y: f.mob.y }); }
+    ui.drag = { guid, sx: px, sy: py, d0x, d0y, origins, moved: false, undone: false };
+    renderMulti(); renderPackList(); renderInspector(); renderMap();
+  } else if (e.shiftKey) {                        // Shift + drag on the background: box selection
+    ui.box = { sx: px, sy: py, cx: px, cy: py, add };
+  } else {
+    ui.pan = { sx: px, sy: py, cx: view.cx, cy: view.cy, moved: false }; svg.classList.add('panning');
+  }
+});
+svg.addEventListener('pointermove', e => {
+  const [px, py] = svgPoint(e);
+  if (db && ui.curMap !== null) {
+    const [wx, wy] = dispToWorld(...screenToDisp(px, py));
+    $('cursor').textContent = 'x ' + wx.toFixed(1) + '   y ' + wy.toFixed(1);
+  }
+  if (ui.box) { ui.box.cx = px; ui.box.cy = py; renderMap(); }
+  else if (ui.pan) {
+    if (Math.hypot(px - ui.pan.sx, py - ui.pan.sy) > 3) ui.pan.moved = true;
+    view.cx = ui.pan.cx - (px - ui.pan.sx) / view.s; view.cy = ui.pan.cy - (py - ui.pan.sy) / view.s; renderMap();
+  } else if (ui.drag) {
+    const d = ui.drag;
+    if (!d.moved && Math.hypot(px - d.sx, py - d.sy) < 4) return;
+    d.moved = true;
+    if (!d.undone) { pushUndo(); d.undone = true; }
+    const [cx, cy] = screenToDisp(px, py);
+    const ddx = cx - d.d0x, ddy = cy - d.d0y;                    // display delta -> world delta (x = -dy, y = -dx)
+    for (const [gg, o] of d.origins) {
+      setPosAll(gg, Math.round((o.x - ddy) * 10) / 10, Math.round((o.y - ddx) * 10) / 10, ui.curMap);
+    }
+    renderMap();
+  }
+});
+function endPointer() {
+  if (ui.box) {
+    const b = ui.box; ui.box = null;
+    const x0 = Math.min(b.sx, b.cx), x1 = Math.max(b.sx, b.cx), y0 = Math.min(b.sy, b.cy), y1 = Math.max(b.sy, b.cy);
+    if (x1 - x0 > 3 || y1 - y0 > 3) {
+      const next = b.add ? new Set(ui.multi) : new Set();
+      let last = null;
+      for (const { m } of mobsOnMap(ui.curMap)) {
+        const [px, py] = dispToScreen(...worldToDisp(m.x, m.y));
+        if (px >= x0 && px <= x1 && py >= y0 && py <= y1) { next.add(m.guid); last = m.guid; }
+      }
+      ui.multi = next; ui.selGuid = last || (next.size ? [...next][next.size - 1] : null);
+    }
+    renderMulti(); renderPackList(); renderInspector(); renderMap();
+  } else if (ui.pan && !ui.pan.moved && !ui.pan.aux && ui.multi.size) {
+    setSel(null); renderMulti(); renderInspector(); renderMap();     // a click on the background clears the selection
+  }
+  if (ui.drag && ui.drag.moved) { renderPackList(); renderInspector(); buildMapSelectKeep(); renderMulti(); }
+  ui.drag = null; ui.pan = null; svg.classList.remove('panning');
+}
+svg.addEventListener('pointerup', endPointer);
+svg.addEventListener('pointercancel', endPointer);
+function buildMapSelectKeep() { const cur = ui.curMap; buildMapSelect(); $('mapSel').value = cur; }
+
+function placeAt(px, py) {
+  const f = findMob(ui.placing); ui.placing = null; hideHint();
+  if (!f) return;
+  pushUndo();
+  const [wx, wy] = dispToWorld(...screenToDisp(px, py));
+  setPosAll(f.mob.guid, Math.round(wx * 10) / 10, Math.round(wy * 10) / 10, ui.curMap);
+  renderAll();
+}
+function showHint(t) { const h = $('hint'); h.textContent = t; h.style.display = 'block'; }
+function hideHint() { $('hint').style.display = 'none'; }
+window.addEventListener('keydown', e => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveToFile(); return; }
+  if (e.key === 'Escape') { ui.placing = null; ui.calib = null; hideHint(); if (tag !== 'input' && tag !== 'select' && tag !== 'textarea' && ui.multi.size) { setSel(null); renderMulti(); renderInspector(); } renderMap(); return; }
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  if (/^[0-8]$/.test(e.key) && ui.multi.size) {
+    pushUndo();
+    for (const g of ui.multi) { const f = findMob(g); if (f) f.mob.mark = Number(e.key); }
+    renderAll();
+  }
+});
+
+/* ===================== background image + calibration ===================== */
+function idb() {
+  return new Promise((res, rej) => {
+    try {
+      const r = indexedDB.open('amMapEditor', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('bg');
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    } catch (e) { rej(e); }
+  });
+}
+function idbGet(k) { return idb().then(d => new Promise((res, rej) => { const q = d.transaction('bg').objectStore('bg').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); })).catch(() => null); }
+function idbPut(k, v) { return idb().then(d => new Promise((res, rej) => { const t = d.transaction('bg', 'readwrite'); t.objectStore('bg').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); })).catch(() => null); }
+function idbDel(k) { return idb().then(d => new Promise((res, rej) => { const t = d.transaction('bg', 'readwrite'); t.objectStore('bg').delete(k); t.oncomplete = res; t.onerror = () => rej(t.error); })).catch(() => null); }
+
+function setBgFromBlob(blob, T) {
+  return new Promise(res => {
+    if (ui.bg && ui.bg.url && !ui.bg.bundled) URL.revokeObjectURL(ui.bg.url);
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      let t = T;
+      if (!t) {
+        const b = bboxOfMap();
+        if (b) { const sc = Math.max((b.x1 - b.x0) / img.naturalWidth, (b.y1 - b.y0) / img.naturalHeight, 0.05); t = { a: sc, b: 0, tx: (b.x0 + b.x1) / 2 - sc * img.naturalWidth / 2, ty: (b.y0 + b.y1) / 2 - sc * img.naturalHeight / 2, calibrated: false }; }
+        else t = { a: 1, b: 0, tx: -img.naturalWidth / 2, ty: -img.naturalHeight / 2, calibrated: false };
+      }
+      ui.bg = { url, w: img.naturalWidth, h: img.naturalHeight, T: t, blob };
+      res();
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); alert('This image could not be read.'); res(); };
+    img.src = url;
+  });
+}
+/* Bundled images: Tools/maps/<name>.png listed in maps/index.js (window.AM_IMAGES, window.AM_MAP_IMAGE = map id -> names).
+   Calibrations are per image: Tools/maps/calibration.js (window.AM_CALIB = { "MoltenCore": {a,b,tx,ty} }) and the ones saved in this browser. */
+const norm = t => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function candidatesFor(id) {
+  const out = [];
+  const add = n => { if (n && !out.includes(n)) out.push(n); };
+  ((window.AM_MAP_IMAGE || {})[id] || []).forEach(add);
+  const mi = db && db.maps[id]; const nm = norm(mi && mi.name);
+  if (nm.length > 3) (window.AM_IMAGES || []).forEach(n => { if (norm(n).includes(nm) || nm.includes(norm(n))) add(n); });
+  return out;
+}
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+function buildBgPick() {
+  const sel = $('bgPick'); sel.innerHTML = '';
+  if (ui.curMap === null || !(window.AM_IMAGES || []).length) { sel.style.display = 'none'; return; }
+  sel.style.display = '';
+  const cands = candidatesFor(ui.curMap), all = window.AM_IMAGES || [];
+  const opt = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; };
+  sel.appendChild(opt('', '(no bundled image)'));
+  if (cands.length) { const g = document.createElement('optgroup'); g.label = 'This map'; cands.forEach(n => g.appendChild(opt(n, n))); sel.appendChild(g); }
+  const g2 = document.createElement('optgroup'); g2.label = 'All images';
+  all.filter(n => !cands.includes(n)).forEach(n => g2.appendChild(opt(n, n))); sel.appendChild(g2);
+  const saved = lsGet('am.pick.' + ui.curMap);
+  sel.value = saved !== null ? saved : (cands[0] || '');
+  if (sel.value !== (saved !== null ? saved : (cands[0] || ''))) sel.value = cands[0] || '';
+}
+function loadBundled(name) {
+  return new Promise(res => {
+    if (!name) { res(false); return; }
+    const img = new Image(), url = 'maps/' + name + '.png';
+    img.onload = () => {
+      const saved = (window.AM_CALIB || {})[name];
+      let t = saved ? Object.assign({ calibrated: true }, saved) : null;
+      if (!t) {
+        const b = bboxOfMap();
+        const sc = b ? Math.max((b.x1 - b.x0) / img.naturalWidth, (b.y1 - b.y0) / img.naturalHeight, 0.05) : 1;
+        t = b ? { a: sc, b: 0, tx: (b.x0 + b.x1) / 2 - sc * img.naturalWidth / 2, ty: (b.y0 + b.y1) / 2 - sc * img.naturalHeight / 2, calibrated: false }
+              : { a: 1, b: 0, tx: -img.naturalWidth / 2, ty: -img.naturalHeight / 2, calibrated: false };
+      }
+      ui.bg = { url, w: img.naturalWidth, h: img.naturalHeight, T: t, blob: null, bundled: true, name };
+      res(true);
+    };
+    img.onerror = () => res(false);
+    img.src = url;
+  });
+}
+function loadBgForMap() {
+  if (ui.bg && ui.bg.url && !ui.bg.bundled) URL.revokeObjectURL(ui.bg.url);
+  ui.bg = null;
+  buildBgPick();
+  if (ui.curMap === null) { updateBgUi(); return Promise.resolve(); }
+  const id = ui.curMap;
+  return idbGet('map:' + id).then(rec => {
+    if (rec && rec.blob) return setBgFromBlob(rec.blob, rec.T);   // an image you loaded yourself wins
+    const name = $('bgPick').value;
+    return loadBundled(name).then(ok => idbGet('img:' + name).then(r2 => { if (ok && r2 && r2.T) ui.bg.T = r2.T; }));
+  }).then(updateBgUi);
+}
+$('bgPick').onchange = e => {
+  if (ui.curMap === null) return;
+  lsSet('am.pick.' + ui.curMap, e.target.value);
+  idbDel('map:' + ui.curMap).then(() => loadBgForMap()).then(() => { renderMap(); });
+};
+function loadBgFile(f) {
+  if (ui.curMap === null) return;
+  setBgFromBlob(f, null).then(() => {
+    idbPut('map:' + ui.curMap, { blob: f, T: ui.bg.T }); updateBgUi();
+    if (!mobsOnMap(ui.curMap).length) { view.cx = ui.bg.T.tx + ui.bg.T.a * ui.bg.w / 2; view.cy = ui.bg.T.ty + ui.bg.T.a * ui.bg.h / 2; view.s = Math.min(W() / ui.bg.w, H() / ui.bg.h) / ui.bg.T.a; }
+    renderMap();
+  });
+}
+function updateBgUi() {
+  const has = !!ui.bg;
+  $('btnCal').disabled = !has; $('btnBgClear').disabled = !has || !!ui.bg.bundled;
+  $('bgInfo').textContent = !has ? 'No image for this map: pick one above or load your own.' : (ui.bg.bundled ? ui.bg.name + '. ' : '') + (ui.bg.T.calibrated ? 'Calibrated (' + ui.bg.w + '×' + ui.bg.h + ' px, ' + (1 / ui.bg.T.a).toFixed(2) + ' px per yard).' : 'Not calibrated yet: click Calibrate and match two points.');
+}
+$('btnBg').onclick = () => { if (ui.curMap === null) { alert('Open a config file first.'); return; } $('bgIn').click(); };
+$('bgIn').onchange = e => { if (e.target.files[0]) loadBgFile(e.target.files[0]); e.target.value = ''; };
+$('btnBgClear').onclick = () => { if (ui.curMap === null) return; ui.calib = null; hideHint(); idbDel('map:' + ui.curMap).then(() => loadBgForMap()).then(renderMap); };
+$('bgOpacity').oninput = e => { ui.bgOpacity = e.target.value / 100; renderMap(); };
+$('btnCal').onclick = () => {
+  if (!ui.bg) return;
+  if (mobsOnMap(ui.curMap).length < 2) { alert('Calibration needs at least two mobs with a known position on this map.'); return; }
+  ui.calib = { step: 'img', pairs: [], pending: null };
+  showHint('1/2 - Click a spot you can recognise on the image, then click the mob that stands there (middle or right button: pan, wheel: zoom, Esc: cancel)');
+  renderMap();
+};
+$('btnCalExport').onclick = async () => {
+  const out = Object.assign({}, window.AM_CALIB || {});
+  try {
+    const d = await idb();
+    await new Promise(res => {
+      const q = d.transaction('bg').objectStore('bg').openCursor();
+      q.onsuccess = () => { const c = q.result; if (!c) { res(); return; } const T = c.value && c.value.T; if (T && T.calibrated && String(c.key).startsWith('img:')) out[String(c.key).slice(4)] = { a: T.a, b: T.b, tx: T.tx, ty: T.ty }; c.continue(); };
+      q.onerror = () => res();
+    });
+  } catch (e) { /* no storage: export what is bundled */ }
+  const ids = Object.keys(out).sort((x, y) => x - y);
+  if (!ids.length) { alert('No calibration to export yet.'); return; }
+  const txt = '// Generated by AutoMarkerEditor.html - map id -> image to world transform (see the editor).\nwindow.AM_CALIB = {\n' +
+    ids.map(k => '  "' + k + '": { a: ' + out[k].a + ', b: ' + out[k].b + ', tx: ' + out[k].tx + ', ty: ' + out[k].ty + ' }').join(',\n') + '\n};\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([txt], { type: 'text/javascript' })); a.download = 'calibration.js';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+function calibClick(px, py, guid) {
+  const c = ui.calib, T = ui.bg.T;
+  if (c.step === 'mob' && guid) {
+    const f = findMob(guid); if (!f || !hasPos(f.mob)) return;
+    const [dx, dy] = worldToDisp(f.mob.x, f.mob.y);
+    c.pairs.push({ u: c.pending.u, v: c.pending.v, dx, dy }); c.pending = null; c.step = 'img';
+    if (c.pairs.length === 2) { finishCalib(); return; }
+    showHint('2/2 - Click a second spot, far from the first, then the mob that stands there');
+    renderMap(); return;
+  }
+  if (guid) return;
+  const [dx, dy] = screenToDisp(px, py), r = T.a * T.a + T.b * T.b;
+  const ex = dx - T.tx, ey = dy - T.ty;
+  c.pending = { u: (ex * T.a + ey * T.b) / r, v: (ey * T.a - ex * T.b) / r };
+  c.step = 'mob';
+  showHint((c.pairs.length + 1) + '/2 - Now click the mob that stands on that spot');
+  renderMap();
+}
+function finishCalib() {
+  const [p1, p2] = ui.calib.pairs;
+  // complex division: z = (q2 - q1) / (p2 - p1), t = q1 - z * p1
+  const pr = p2.u - p1.u, pi = p2.v - p1.v, qr = p2.dx - p1.dx, qi = p2.dy - p1.dy, den = pr * pr + pi * pi;
+  if (den < 1e-6 || (qr * qr + qi * qi) < 1e-6) { alert('The two points are too close to each other.'); ui.calib = null; hideHint(); renderMap(); return; }
+  const a = (qr * pr + qi * pi) / den, b = (qi * pr - qr * pi) / den;
+  const tx = p1.dx - (a * p1.u - b * p1.v), ty = p1.dy - (b * p1.u + a * p1.v);
+  ui.bg.T = { a, b, tx, ty, calibrated: true };
+  idbPut(ui.bg.bundled ? 'img:' + ui.bg.name : 'map:' + ui.curMap, { blob: ui.bg.blob, T: ui.bg.T });
+  ui.calib = null; hideHint(); updateBgUi(); renderMap();
+}
+
+/* ===================== misc ===================== */
+function renderStats() {
+  if (!db) return;
+  let total = 0, placed = 0, un = 0, packs = 0;
+  for (const p of allPacks()) { packs++; for (const m of p.mobs) { total++; if (hasPos(m)) placed++; if (m.mark === 0) un++; } }
+  $('stats').textContent = fileName + ' - ' + packs + ' packs, ' + total + ' mobs, ' + placed + ' placed, ' + un + ' unmarked';
+}
+function renderAll() {
+  if (!db) return;
+  if (ui.selPack && !findPack(ui.selZone, ui.selPack)) { ui.selPack = null; setSel(null); }
+  for (const g of [...ui.multi]) if (!findMob(g)) ui.multi.delete(g);
+  if (ui.selGuid && !ui.multi.has(ui.selGuid)) ui.selGuid = ui.multi.size ? [...ui.multi][ui.multi.size - 1] : null;
+  buildMapSelectKeep(); renderPackList(); renderInspector(); renderMulti(); renderIgnored(); renderStats(); renderMap(); updateBgUi();
+  $('btnUndo').disabled = !undoStack.length; $('btnSave').disabled = !db; $('btnSaveFile').disabled = !db;
+}
+window.addEventListener('resize', renderMap);
+new ResizeObserver(renderMap).observe($('stage'));
+</script>
+</body>
+</html>
